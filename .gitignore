@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv/
+env/
+venv/
+ENV/
+*.db
+*.sqlite3
+
+# Logs & Storage generated files
+logs/*.log
+storage/charts_auto/*.png
+storage/charts_custom/*.webp
+storage/charts_custom/*.png
+storage/charts_custom/*.jpg
+!storage/charts_auto/.gitkeep
+!storage/charts_custom/.gitkeep
+
+# Node / React
+node_modules/
+frontend/dist/
+frontend/node_modules/
+.npm
+.eslintcache
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

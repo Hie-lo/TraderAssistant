@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: trading_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: trading_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trading_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      ENV_MODE: production
+      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@db:5432/trading_db
+      BOT_TOKEN: ${BOT_TOKEN:-7000000000:AAExampleTelegramBotTokenPlaceholder}
+      ADMIN_LOG_CHANNEL_ID: ${ADMIN_LOG_CHANNEL_ID:--1001234567890}
+      SUPER_ADMIN_IDS: ${SUPER_ADMIN_IDS:-[111111111]}
+      MINI_APP_URL: ${MINI_APP_URL:-https://your-domain.com}
+      STORAGE_DIR: storage
+      LOGS_DIR: logs
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/storage:/app/storage
+      - ./backend/logs:/app/logs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: trading_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:

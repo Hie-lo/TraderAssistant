@@ -1,0 +1,32 @@
+2026-11-16 02:46:43.200 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
+2026-11-16 02:47:48.694 +03:30 | INFO     | app.database.seed:seed_initial_settings:108 - Seeded 11 default system settings into database.
+2026-11-16 02:47:48.696 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:47:48.732 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:47:48.773 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:47:48.788 +03:30 | INFO     | app.services.trade_service:create_trade:130 - Created trade d8842891-70da-4d34-a2eb-ef8b30254c18 for user 111111111: BTC / USDT (LONG)
+2026-11-16 02:47:52.302 +03:30 | WARNING  | app.services.market_service:fetch_ohlcv_dataframe:54 - CCXT fetch_ohlcv failed for BTCUSDT: binance {"code":-1120,"msg":"Invalid interval."}. Generating fallback candles.
+2026-11-16 02:47:52.555 +03:30 | INFO     | app.services.chart_service:generate_trade_chart:136 - Generated auto chart for trade d8842891-70da-4d34-a2eb-ef8b30254c18 at /static/charts_auto/d8842891-70da-4d34-a2eb-ef8b30254c18_1H.png
+2026-11-16 02:47:52.561 +03:30 | INFO     | app.api.v1.trades:generate_and_attach_chart_task:55 - Attached chart /static/charts_auto/d8842891-70da-4d34-a2eb-ef8b30254c18_1H.png to trade d8842891-70da-4d34-a2eb-ef8b30254c18
+2026-11-16 02:47:52.568 +03:30 | INFO     | app.services.trade_service:update_trade_dirty_state:194 - Updated trade dirty state for d8842891-70da-4d34-a2eb-ef8b30254c18: ['status', 'realized_pnl', 'closed_at', 'notes']
+2026-11-16 02:47:52.602 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:47:52.634 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
+2026-11-16 02:58:37.332 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:58:37.355 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:58:37.381 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:58:37.392 +03:30 | INFO     | app.services.trade_service:create_trade:130 - Created trade 1e7479f3-6cc5-411c-be57-fe979813a335 for user 111111111: BTC / USDT (LONG)
+2026-11-16 02:58:40.211 +03:30 | WARNING  | app.services.market_service:fetch_ohlcv_dataframe:54 - CCXT fetch_ohlcv failed for BTCUSDT: binance {"code":-1120,"msg":"Invalid interval."}. Generating fallback candles.
+2026-11-16 02:58:40.342 +03:30 | INFO     | app.services.chart_service:generate_trade_chart:136 - Generated auto chart for trade 1e7479f3-6cc5-411c-be57-fe979813a335 at /static/charts_auto/1e7479f3-6cc5-411c-be57-fe979813a335_1H.png
+2026-11-16 02:58:40.348 +03:30 | INFO     | app.api.v1.trades:generate_and_attach_chart_task:55 - Attached chart /static/charts_auto/1e7479f3-6cc5-411c-be57-fe979813a335_1H.png to trade 1e7479f3-6cc5-411c-be57-fe979813a335
+2026-11-16 02:58:40.355 +03:30 | INFO     | app.services.trade_service:update_trade_dirty_state:194 - Updated trade dirty state for 1e7479f3-6cc5-411c-be57-fe979813a335: ['status', 'realized_pnl', 'closed_at', 'notes']
+2026-11-16 02:58:40.369 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 02:58:40.392 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
+2026-11-16 03:07:01.016 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 03:07:01.037 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 03:07:01.061 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 03:07:01.070 +03:30 | INFO     | app.services.trade_service:create_trade:130 - Created trade ad730db2-fbfe-4a14-a8ce-7d696fbb3828 for user 111111111: BTC / USDT (LONG)
+2026-11-16 03:07:04.928 +03:30 | WARNING  | app.services.market_service:fetch_ohlcv_dataframe:54 - CCXT fetch_ohlcv failed for BTCUSDT: binance {"code":-1120,"msg":"Invalid interval."}. Generating fallback candles.
+2026-11-16 03:07:05.031 +03:30 | INFO     | app.services.chart_service:generate_trade_chart:136 - Generated auto chart for trade ad730db2-fbfe-4a14-a8ce-7d696fbb3828 at /static/charts_auto/ad730db2-fbfe-4a14-a8ce-7d696fbb3828_1H.png
+2026-11-16 03:07:05.037 +03:30 | INFO     | app.api.v1.trades:generate_and_attach_chart_task:55 - Attached chart /static/charts_auto/ad730db2-fbfe-4a14-a8ce-7d696fbb3828_1H.png to trade ad730db2-fbfe-4a14-a8ce-7d696fbb3828
+2026-11-16 03:07:05.044 +03:30 | INFO     | app.services.trade_service:update_trade_dirty_state:194 - Updated trade dirty state for ad730db2-fbfe-4a14-a8ce-7d696fbb3828: ['status', 'realized_pnl', 'closed_at', 'notes']
+2026-11-16 03:07:05.057 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-16 03:07:05.080 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
