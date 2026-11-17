@@ -3,25 +3,52 @@ from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 
 
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     """Main dashboard keyboard with WebApp launch button and quick utilities."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🚀 باز کردن دستیار و ماشین‌حساب معاملاتی",
-                    web_app=WebAppInfo(url=settings.MINI_APP_URL)
-                )
-            ],
-            [
-                InlineKeyboardButton(text="🔔 ثبت هشدار هوشمند قیمت", callback_data="btn_new_alert"),
-                InlineKeyboardButton(text="📊 غربالگر سریع بازار", callback_data="btn_screener")
-            ],
-            [
-                InlineKeyboardButton(text="📈 خلاصه ژورنال و وین‌ریت", callback_data="btn_portfolio_summary")
-            ]
-        ]
-    )
+    url = (settings.MINI_APP_URL or "").strip()
+    buttons = []
+
+    # 1. WebApp button if HTTPS configured, otherwise guidance button
+    if url.startswith("https://") and "your-domain.com" not in url:
+        buttons.append([
+            InlineKeyboardButton(
+                text="🚀 باز کردن دستیار و ماشین‌حساب (Web App)",
+                web_app=WebAppInfo(url=url)
+            )
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text="🚀 راهنمای اتصال مینی‌اپ (نیاز به HTTPS)",
+                callback_data="btn_miniapp_guide"
+            )
+        ])
+
+    # 2. Alerts management
+    buttons.append([
+        InlineKeyboardButton(text="🔔 ثبت هشدار قیمت", callback_data="btn_new_alert"),
+        InlineKeyboardButton(text="📋 هشدارهای فعال من", callback_data="btn_my_alerts")
+    ])
+
+    # 3. Market screener & Portfolio
+    buttons.append([
+        InlineKeyboardButton(text="📊 دیده‌بان سریع بازار", callback_data="btn_screener"),
+        InlineKeyboardButton(text="📈 کارنامه معاملاتی", callback_data="btn_portfolio_summary")
+    ])
+
+    # 4. Text calculator & Guide
+    buttons.append([
+        InlineKeyboardButton(text="🧮 راهنمای محاسبه و ریسک", callback_data="btn_quick_calc"),
+        InlineKeyboardButton(text="ℹ️ وضعیت سرور و راهنما", callback_data="btn_help_info")
+    ])
+
+    # 5. Super Admin button
+    if user_id and user_id in settings.SUPER_ADMIN_IDS:
+        buttons.append([
+            InlineKeyboardButton(text="🛡️ پنل مدیریت ارشد", callback_data="btn_open_admin")
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_pair_selection_keyboard() -> InlineKeyboardMarkup:

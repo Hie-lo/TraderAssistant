@@ -1,9 +1,10 @@
 from decimal import Decimal
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from app.database.session import AsyncSessionLocal
+from app.repositories.alert_repo import AlertRepository
 from app.services.alert_service import AlertService
 from app.services.market_service import MarketService
 from app.bot.states import AlertFSM
@@ -134,4 +135,58 @@ async def enter_value(message: Message, state: FSMContext):
 async def cancel_wizard(query: CallbackQuery, state: FSMContext):
     await state.clear()
     await query.message.answer("عملیات لغو شد.")
+    await query.answer()
+
+
+@router.callback_query(F.data == "btn_my_alerts")
+async def handle_list_my_alerts(query: CallbackQuery):
+    user = query.from_user
+    if not user:
+        return
+
+    async with AsyncSessionLocal() as session:
+        repo = AlertRepository(session)
+        alerts = await repo.list_by_user(user.id, limit=20)
+
+    active_alerts = [a for a in alerts if not a.is_triggered]
+    if not active_alerts:
+        await query.message.answer("📭 شما در حال حاضر هیچ هشدار فعالی ندارید.\n\nاز گزینه «🔔 ثبت هشدار قیمت» می‌توانید هشدار جدید ثبت کنید.")
+        await query.answer()
+        return
+
+    text = "📋 <b>لیست هشدارهای فعال شما:</b>\n\n"
+    buttons = []
+    for a in active_alerts:
+        unit = "%" if a.alert_type == "PERCENT" else "$"
+        dir_icon = "🟢" if a.direction == "UP" else "🔴"
+        text += (
+            f"{dir_icon} <b>{a.symbol}</b> | هدف: <code>{a.target_value}{unit}</code> "
+            f"(قیمت تریگر: <code>${a.trigger_price:,.2f}</code>)\n"
+        )
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🗑️ حذف هشدار {a.symbol} ({a.target_value}{unit})",
+                callback_data=f"del_alert_{a.id}"
+            )
+        ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await query.message.answer(text, reply_markup=keyboard)
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("del_alert_"))
+async def handle_delete_alert(query: CallbackQuery):
+    alert_id_str = query.data.replace("del_alert_", "")
+    try:
+        alert_id = int(alert_id_str)
+        async with AsyncSessionLocal() as session:
+            repo = AlertRepository(session)
+            deleted = await repo.delete_by_id(alert_id)
+        if deleted:
+            await query.message.answer(f"✅ هشدار شماره {alert_id} با موفقیت حذف شد.")
+        else:
+            await query.message.answer("⚠️ هشدار یافت نشد یا قبلاً حذف شده است.")
+    except Exception as e:
+        await query.message.answer(f"خطا در حذف هشدار: {e}")
     await query.answer()
