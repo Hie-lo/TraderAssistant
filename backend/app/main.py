@@ -62,6 +62,18 @@ async def periodic_alerts_check_task():
         logger.warning(f"Error during periodic alerts check: {e}")
 
 
+async def _run_bot():
+    try:
+        logger.info("Connecting to Telegram Bot API...")
+        me = await bot.get_me()
+        logger.info(f"✅ Telegram bot connected: @{me.username} (ID: {me.id})")
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Cleared previous webhooks. Starting Aiogram polling loop...")
+        await dp.start_polling(bot, handle_signals=False)
+    except Exception as e:
+        logger.critical(f"❌ Telegram bot polling failed to start or stopped: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: orchestrates DB schema, RAM caches, scheduler, and background bot polling."""
@@ -102,12 +114,9 @@ async def lifespan(app: FastAPI):
 
     # 5. Start Bot Polling in background task if valid token
     if settings.BOT_TOKEN and "Placeholder" not in settings.BOT_TOKEN:
-        logger.info("Starting Aiogram Telegram bot polling...")
-        bot_polling_task = asyncio.create_task(
-            dp.start_polling(bot, handle_signals=False)
-        )
+        bot_polling_task = asyncio.create_task(_run_bot())
     else:
-        logger.warning("BOT_TOKEN is not configured or placeholder. Bot polling skipped.")
+        logger.warning(f"BOT_TOKEN is not configured or placeholder ('{settings.BOT_TOKEN[:12]}...'). Bot polling skipped.")
 
     yield
 

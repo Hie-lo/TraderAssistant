@@ -18,3 +18,13 @@
 2026-11-17 20:52:48.440 +03:30 | INFO     | app.services.trade_service:update_trade_dirty_state:194 - Updated trade dirty state for 4e4eba3c-acb1-4fda-ba21-9ad7fbcaba28: ['status', 'realized_pnl', 'closed_at', 'notes']
 2026-11-17 20:52:48.461 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
 2026-11-17 20:52:48.483 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
+2026-11-17 21:02:27.209 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-17 21:02:27.232 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-17 21:02:27.257 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-17 21:02:27.267 +03:30 | INFO     | app.services.trade_service:create_trade:130 - Created trade f26690b4-ad24-45cd-bdad-0abe736b5ca6 for user 111111111: BTC / USDT (LONG)
+2026-11-17 21:02:35.907 +03:30 | WARNING  | app.services.market_service:fetch_ohlcv_dataframe:54 - CCXT fetch_ohlcv failed for BTCUSDT: binance GET https://api.binance.com/api/v3/exchangeInfo. Generating fallback candles.
+2026-11-17 21:02:36.034 +03:30 | INFO     | app.services.chart_service:generate_trade_chart:136 - Generated auto chart for trade f26690b4-ad24-45cd-bdad-0abe736b5ca6 at /static/charts_auto/f26690b4-ad24-45cd-bdad-0abe736b5ca6_1H.png
+2026-11-17 21:02:36.040 +03:30 | INFO     | app.api.v1.trades:generate_and_attach_chart_task:55 - Attached chart /static/charts_auto/f26690b4-ad24-45cd-bdad-0abe736b5ca6_1H.png to trade f26690b4-ad24-45cd-bdad-0abe736b5ca6
+2026-11-17 21:02:36.047 +03:30 | INFO     | app.services.trade_service:update_trade_dirty_state:194 - Updated trade dirty state for f26690b4-ad24-45cd-bdad-0abe736b5ca6: ['status', 'realized_pnl', 'closed_at', 'notes']
+2026-11-17 21:02:36.071 +03:30 | INFO     | app.core.dynamic_config:load_all:20 - Loaded 11 dynamic configuration keys into memory.
+2026-11-17 21:02:36.107 +03:30 | WARNING  | app.core.rate_limiter:check_rate_limit:42 - User 88888 auto-banned for 15 minutes due to request storm (50 req/10s).
