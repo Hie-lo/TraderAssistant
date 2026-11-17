@@ -11,6 +11,7 @@ class UserProfileSchema(CamelModel):
     discipline_badge: str
     status: str
     role: str = "USER"
+    photo_url: Optional[str] = None
 
 
 class ConfigPairSchema(CamelModel):

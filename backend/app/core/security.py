@@ -16,6 +16,7 @@ class TelegramUser(BaseModel):
     first_name: str
     last_name: Optional[str] = None
     username: Optional[str] = None
+    photo_url: Optional[str] = None
     language_code: Optional[str] = None
     is_premium: Optional[bool] = False
 
@@ -24,6 +25,7 @@ class AuthenticatedUser(BaseModel):
     id: int
     first_name: str
     username: Optional[str] = None
+    photo_url: Optional[str] = None
     role: str = "USER"
     is_mock: bool = False
 
@@ -96,6 +98,7 @@ def verify_telegram_init_data(init_data_raw: Optional[str]) -> AuthenticatedUser
         id=telegram_user.id,
         first_name=telegram_user.first_name,
         username=telegram_user.username,
+        photo_url=telegram_user.photo_url,
         role=role,
         is_mock=False
     )

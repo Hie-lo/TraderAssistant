@@ -50,70 +50,32 @@ const INFO_TOOLTIPS = {
   }
 };
 
-const INITIAL_TRADES = [
-  {
-    id: 't1',
-    pair: 'BTC / USDT',
-    base: 'BTC',
-    isLong: true,
-    entryPrice: '62400',
-    stopLoss: '61500',
-    takeProfit: '64800',
-    size: '0.0444',
-    margin: '277.33',
-    leverage: 10,
-    riskAmount: '40.00',
-    potentialProfit: '106.67',
-    rr: '2.67',
-    status: 'TP',
-    strategy: 'Smart Money / ICT',
-    entryReason: 'جمع‌آوری نقدینگی کف روزانه و تشکیل CHoCH در تایم‌فریم ۱۵ دقیقه.',
-    notes: 'صبر کردن برای کلوز کندل تاییدیه باعث شد ورود بسیار دقیقی داشته باشم.',
-    date: '۱۴۰۳/۰۸/۱۲ - ۱۴:۳۰',
-    hasChartSnapshot: true,
-    chartTimeframe: '15m',
-    customChartUrl: null
-  },
-  {
-    id: 't2',
-    pair: 'SOL / USDT',
-    base: 'SOL',
-    isLong: false,
-    entryPrice: '152.00',
-    stopLoss: '156.50',
-    takeProfit: '140.00',
-    size: '4.4444',
-    margin: '33.78',
-    leverage: 20,
-    riskAmount: '20.00',
-    potentialProfit: '53.33',
-    rr: '2.67',
-    status: 'OPEN',
-    strategy: 'Breakout',
-    entryReason: 'واکنش به مقاومت هفتگی و واگرایی منفی در RSI.',
-    notes: '',
-    date: 'امروز - ۱۰:۱۵',
-    hasChartSnapshot: true,
-    chartTimeframe: '1H',
-    customChartUrl: null
+const getTelegramUser = () => {
+  try {
+    return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
+  } catch (e) {
+    return null;
   }
-];
+};
 
 const App = () => {
   // --- Navigation & User State ---
   const [activeTab, setActiveTab] = useState('home'); // 'home' | 'calc' | 'journal' | 'portfolio' | 'empty'
   const [userName, setUserName] = useState(() => {
-    try {
-      const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-      if (tgUser?.first_name) return tgUser.first_name;
-    } catch (e) {}
-    return 'امیرحسین';
+    const tg = getTelegramUser();
+    if (tg?.first_name) {
+      return tg.last_name ? `${tg.first_name} ${tg.last_name}` : tg.first_name;
+    }
+    return 'معامله‌گر';
+  });
+  const [userPhoto, setUserPhoto] = useState(() => {
+    return getTelegramUser()?.photo_url || null;
   });
 
   // --- Dynamic Pairs & Strategies from Backend ---
   const [pairs, setPairs] = useState(FALLBACK_PAIRS);
   const [defaultStrategies, setDefaultStrategies] = useState(FALLBACK_STRATEGIES);
-  const [customStrategies, setCustomStrategies] = useState(['ستاپ شخصی فیبوناچی']);
+  const [customStrategies, setCustomStrategies] = useState([]);
   const [maxLeverageLimit, setMaxLeverageLimit] = useState(2000);
 
   // --- Pair Selector & Live Price State ---
@@ -136,8 +98,8 @@ const App = () => {
   const [saveSuccessToast, setSaveSuccessToast] = useState(false);
   const [activeInfoKey, setActiveInfoKey] = useState(null);
 
-  // --- Journal & Strategy State ---
-  const [trades, setTrades] = useState(INITIAL_TRADES);
+  // --- Journal & Strategy State (Initial state empty for new users) ---
+  const [trades, setTrades] = useState([]);
   const [openStatusMenuId, setOpenStatusMenuId] = useState(null);
   const [selectedTradeId, setSelectedTradeId] = useState(null);
   const [draftTrade, setDraftTrade] = useState(null);
@@ -156,13 +118,25 @@ const App = () => {
   const scrollLeftStartRef = useRef(0);
   const hasDraggedRef = useRef(false);
 
-  // --- 1. Load Initial Bootstrap Data from Backend ---
+  // --- 1. Load Initial Bootstrap Data from Backend & Sync Telegram User ---
   useEffect(() => {
+    const tg = getTelegramUser();
+    if (tg?.first_name) {
+      const fullName = tg.last_name ? `${tg.first_name} ${tg.last_name}` : tg.first_name;
+      setUserName(fullName);
+    }
+    if (tg?.photo_url) {
+      setUserPhoto(tg.photo_url);
+    }
+
     const loadBootstrap = async () => {
       try {
         const data = await api.getBootstrap();
-        if (data.user?.first_name) {
+        if (data.user?.first_name && !getTelegramUser()?.first_name) {
           setUserName(data.user.first_name);
+        }
+        if (data.user?.photo_url && !getTelegramUser()?.photo_url) {
+          setUserPhoto(data.user.photo_url);
         }
         if (data.user?.default_balance) {
           setBalance(data.user.default_balance);
@@ -181,7 +155,7 @@ const App = () => {
         if (data.custom_strategies) {
           setCustomStrategies(data.custom_strategies);
         }
-        if (data.trades && data.trades.length > 0) {
+        if (Array.isArray(data.trades)) {
           setTrades(data.trades);
         }
       } catch (err) {
@@ -940,9 +914,18 @@ const App = () => {
             <div className="flex items-center justify-between bg-gray-950/70 p-3 rounded-2xl border border-gray-800/80">
               <div className="flex items-center gap-3">
                 <div className="relative">
-                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-extrabold text-base shadow-lg shadow-blue-500/20">
-                    {userName.charAt(0)}
-                  </div>
+                  {userPhoto ? (
+                    <img
+                      src={userPhoto}
+                      alt={userName}
+                      className="w-11 h-11 rounded-2xl object-cover border border-gray-700/80 shadow-lg shadow-blue-500/10"
+                      onError={() => setUserPhoto(null)}
+                    />
+                  ) : (
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-extrabold text-base shadow-lg shadow-blue-500/20">
+                      {(userName || 'U').charAt(0)}
+                    </div>
+                  )}
                   <span className="w-3 h-3 rounded-full bg-emerald-500 border-2 border-gray-950 absolute -bottom-0.5 -right-0.5"></span>
                 </div>
                 <div>
@@ -1102,46 +1085,59 @@ const App = () => {
               </div>
 
               <div className="space-y-2">
-                {trades.slice(0, 3).map((trade) => {
-                  const meta = getTradeResultMeta(trade);
-                  return (
-                    <div
-                      key={trade.id}
-                      onClick={() => {
-                        setSelectedTradeId(trade.id);
-                        setActiveTab('journal');
-                      }}
-                      className="bg-gray-950 hover:bg-gray-900 border border-gray-800/90 rounded-xl p-3 flex items-center justify-between cursor-pointer transition-all"
+                {trades.length === 0 ? (
+                  <div className="bg-gray-950/60 border border-dashed border-gray-800 rounded-xl p-4 text-center">
+                    <span className="text-gray-500 text-xs block">هنوز معامله‌ای در ژورنال ثبت نشده است.</span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('calc')}
+                      className="text-[11px] text-blue-400 font-bold mt-1.5 hover:underline"
                     >
-                      <div className="flex items-center gap-2.5">
-                        <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-mono font-extrabold ${
-                          trade.isLong ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                        }`}>
-                          {trade.isLong ? 'L' : 'S'}
-                        </span>
-                        <div>
-                          <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                            {trade.pair}
-                            <span className="text-[9px] font-mono bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">{trade.leverage}x</span>
-                            {(trade.hasChartSnapshot || trade.customChartUrl) && (
-                              <span className="text-[9px] bg-blue-500/15 text-blue-400 px-1.5 py-0.5 rounded">📊 چارت</span>
-                            )}
-                          </div>
-                          <span className="text-[10px] text-gray-500 block mt-0.5">
-                            {trade.strategy} • ورود: <span className="font-mono text-gray-400">${trade.entryPrice}</span>
+                      ثبت اولین معامله با ماشین‌حساب ←
+                    </button>
+                  </div>
+                ) : (
+                  trades.slice(0, 3).map((trade) => {
+                    const meta = getTradeResultMeta(trade);
+                    return (
+                      <div
+                        key={trade.id}
+                        onClick={() => {
+                          setSelectedTradeId(trade.id);
+                          setActiveTab('journal');
+                        }}
+                        className="bg-gray-950 hover:bg-gray-900 border border-gray-800/90 rounded-xl p-3 flex items-center justify-between cursor-pointer transition-all"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-mono font-extrabold ${
+                            trade.isLong ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                          }`}>
+                            {trade.isLong ? 'L' : 'S'}
                           </span>
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                              {trade.pair}
+                              <span className="text-[9px] font-mono bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">{trade.leverage}x</span>
+                              {(trade.hasChartSnapshot || trade.customChartUrl) && (
+                                <span className="text-[9px] bg-blue-500/15 text-blue-400 px-1.5 py-0.5 rounded">📊 چارت</span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-gray-500 block mt-0.5">
+                              {trade.strategy} • ورود: <span className="font-mono text-gray-400">${trade.entryPrice}</span>
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-left">
+                          <span dir="ltr" className={`font-mono text-xs font-bold block ${meta.color}`}>
+                            {meta.pnlText}
+                          </span>
+                          <span className="text-[9px] text-gray-500 block mt-0.5">{meta.badge}</span>
                         </div>
                       </div>
-
-                      <div className="text-left">
-                        <span dir="ltr" className={`font-mono text-xs font-bold block ${meta.color}`}>
-                          {meta.pnlText}
-                        </span>
-                        <span className="text-[9px] text-gray-500 block mt-0.5">{meta.badge}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -1637,98 +1633,119 @@ const App = () => {
 
             {/* Vertical List of Trade Cards */}
             <div className="space-y-2.5">
-              {trades.map((trade) => {
-                const resultMeta = getTradeResultMeta(trade);
-
-                return (
-                  <div
-                    key={trade.id}
-                    onClick={() => {
-                      setSelectedTradeId(trade.id);
-                      setIsStrategyBarOpen(false);
-                    }}
-                    className="bg-gray-950 hover:bg-gray-900/90 border border-gray-800 rounded-xl p-3.5 transition-all cursor-pointer relative"
+              {trades.length === 0 ? (
+                <div className="bg-gray-950/60 border border-dashed border-gray-800 rounded-2xl p-8 text-center space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-gray-900 border border-gray-800 flex items-center justify-center text-gray-500 text-xl">
+                    📖
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-gray-300">هنوز معامله‌ای در ژورنال ثبت نشده است</h3>
+                    <p className="text-[11px] text-gray-500 mt-1 max-w-xs mx-auto">
+                      از تب ماشین‌حساب استفاده کنید تا پس از محاسبه دقیق حجم و ریسک، پوزیشن خود را به صورت خودکار در ژورنال ثبت کنید.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('calc')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-xl text-xs font-bold transition-all"
                   >
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-2.5">
-                        <span className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold ${
-                          trade.isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
-                        }`}>
-                          {trade.isLong ? 'LONG' : 'SHORT'}
-                        </span>
-                        <div>
-                          <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                            {trade.pair}
-                            <span className="text-[10px] font-mono text-gray-400 bg-gray-800 px-1.5 rounded">{trade.leverage}x</span>
-                            {(trade.hasChartSnapshot || trade.customChartUrl) && (
-                              <span className="text-[9px] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-1.5 py-0.2 rounded flex items-center gap-1" title="دارای تصویر چارت">
-                                📊 چارت
-                              </span>
-                            )}
+                    رفتن به ماشین‌حساب معاملاتی 🧮
+                  </button>
+                </div>
+              ) : (
+                trades.map((trade) => {
+                  const resultMeta = getTradeResultMeta(trade);
+
+                  return (
+                    <div
+                      key={trade.id}
+                      onClick={() => {
+                        setSelectedTradeId(trade.id);
+                        setIsStrategyBarOpen(false);
+                      }}
+                      className="bg-gray-950 hover:bg-gray-900/90 border border-gray-800 rounded-xl p-3.5 transition-all cursor-pointer relative"
+                    >
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2.5">
+                          <span className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold ${
+                            trade.isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                          }`}>
+                            {trade.isLong ? 'LONG' : 'SHORT'}
+                          </span>
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                              {trade.pair}
+                              <span className="text-[10px] font-mono text-gray-400 bg-gray-800 px-1.5 rounded">{trade.leverage}x</span>
+                              {(trade.hasChartSnapshot || trade.customChartUrl) && (
+                                <span className="text-[9px] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-1.5 py-0.2 rounded flex items-center gap-1" title="دارای تصویر چارت">
+                                  📊 چارت
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-gray-500 block mt-0.5">{trade.strategy} • {trade.date}</span>
                           </div>
-                          <span className="text-[10px] text-gray-500 block mt-0.5">{trade.strategy} • {trade.date}</span>
+                        </div>
+
+                        <div className="relative" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => setOpenStatusMenuId(openStatusMenuId === trade.id ? null : trade.id)}
+                            className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition-all ${resultMeta.bg}`}
+                          >
+                            {resultMeta.badge}
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                          </button>
+
+                          {openStatusMenuId === trade.id && (
+                            <div className="absolute left-0 top-9 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-1.5 flex items-center gap-1 z-30">
+                              <button
+                                type="button"
+                                onClick={(e) => updateTradeStatus(trade.id, 'TP', e)}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white text-[10px] font-bold transition-colors"
+                              >
+                                TP
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => updateTradeStatus(trade.id, 'SL', e)}
+                                className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white text-[10px] font-bold transition-colors"
+                              >
+                                SL
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => updateTradeStatus(trade.id, 'DRAW', e)}
+                                className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-white text-[10px] font-bold transition-colors"
+                              >
+                                Draw
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="relative" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          onClick={() => setOpenStatusMenuId(openStatusMenuId === trade.id ? null : trade.id)}
-                          className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition-all ${resultMeta.bg}`}
-                        >
-                          {resultMeta.badge}
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-                        </button>
-
-                        {openStatusMenuId === trade.id && (
-                          <div className="absolute left-0 top-9 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-1.5 flex items-center gap-1 z-30">
-                            <button
-                              type="button"
-                              onClick={(e) => updateTradeStatus(trade.id, 'TP', e)}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white text-[10px] font-bold transition-colors"
-                            >
-                              TP
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => updateTradeStatus(trade.id, 'SL', e)}
-                              className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white text-[10px] font-bold transition-colors"
-                            >
-                              SL
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => updateTradeStatus(trade.id, 'DRAW', e)}
-                              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-white text-[10px] font-bold transition-colors"
-                            >
-                              Draw
-                            </button>
-                          </div>
-                        )}
+                      <div dir="ltr" className="grid grid-cols-4 gap-2 mt-3 pt-2.5 border-t border-gray-800/70 text-[11px] font-mono">
+                        <div>
+                          <span className="text-gray-500 text-[10px] block">Entry</span>
+                          <span className="text-gray-200 font-semibold">${trade.entryPrice}</span>
+                        </div>
+                        <div className="text-center">
+                          <span className="text-gray-500 text-[10px] block">Stop Loss</span>
+                          <span className="text-rose-400 font-semibold">{trade.stopLoss !== '—' ? `$${trade.stopLoss}` : '—'}</span>
+                        </div>
+                        <div className="text-center">
+                          <span className="text-gray-500 text-[10px] block">Take Profit</span>
+                          <span className="text-emerald-400 font-semibold">{trade.takeProfit !== '—' ? `$${trade.takeProfit}` : '—'}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-gray-500 text-[10px] block">Result</span>
+                          <span className={`font-bold ${resultMeta.color}`}>{resultMeta.pnlText}</span>
+                        </div>
                       </div>
                     </div>
-
-                    <div dir="ltr" className="grid grid-cols-4 gap-2 mt-3 pt-2.5 border-t border-gray-800/70 text-[11px] font-mono">
-                      <div>
-                        <span className="text-gray-500 text-[10px] block">Entry</span>
-                        <span className="text-gray-200 font-semibold">${trade.entryPrice}</span>
-                      </div>
-                      <div className="text-center">
-                        <span className="text-gray-500 text-[10px] block">Stop Loss</span>
-                        <span className="text-rose-400 font-semibold">{trade.stopLoss !== '—' ? `$${trade.stopLoss}` : '—'}</span>
-                      </div>
-                      <div className="text-center">
-                        <span className="text-gray-500 text-[10px] block">Take Profit</span>
-                        <span className="text-emerald-400 font-semibold">{trade.takeProfit !== '—' ? `$${trade.takeProfit}` : '—'}</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-gray-500 text-[10px] block">Result</span>
-                        <span className={`font-bold ${resultMeta.color}`}>{resultMeta.pnlText}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -2177,25 +2194,31 @@ const App = () => {
             <div className="space-y-2.5">
               <h3 className="text-xs font-bold text-gray-300 px-1">عملکرد به تفکیک استراتژی</h3>
               <div className="space-y-2">
-                {journalStats.strategiesList.map((st) => {
-                  const stWinRate = st.total > 0 ? Math.round((st.wins / st.total) * 100) : 0;
-                  return (
-                    <div key={st.name} className="bg-gray-950 p-3 rounded-xl border border-gray-800 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-white block">{st.name}</span>
-                        <span className="text-[10px] text-gray-500">{st.total} معامله ثبت‌شده • وین‌ریت {stWinRate}%</span>
+                {journalStats.strategiesList.length === 0 ? (
+                  <div className="bg-gray-950/60 border border-dashed border-gray-800 rounded-xl p-4 text-center text-gray-500 text-xs">
+                    هنوز داده‌ای برای تحلیل عملکرد استراتژی‌ها وجود ندارد.
+                  </div>
+                ) : (
+                  journalStats.strategiesList.map((st) => {
+                    const stWinRate = st.total > 0 ? Math.round((st.wins / st.total) * 100) : 0;
+                    return (
+                      <div key={st.name} className="bg-gray-950 p-3 rounded-xl border border-gray-800 flex items-center justify-between">
+                        <div>
+                          <span className="text-xs font-bold text-white block">{st.name}</span>
+                          <span className="text-[10px] text-gray-500">{st.total} معامله ثبت‌شده • وین‌ریت {stWinRate}%</span>
+                        </div>
+                        <span
+                          dir="ltr"
+                          className={`font-mono text-xs font-bold px-2 py-1 rounded-lg ${
+                            st.pnl >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                          }`}
+                        >
+                          {st.pnl >= 0 ? `+$${st.pnl.toFixed(2)}` : `-$${Math.abs(st.pnl).toFixed(2)}`}
+                        </span>
                       </div>
-                      <span
-                        dir="ltr"
-                        className={`font-mono text-xs font-bold px-2 py-1 rounded-lg ${
-                          st.pnl >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
-                        }`}
-                      >
-                        {st.pnl >= 0 ? `+$${st.pnl.toFixed(2)}` : `-$${Math.abs(st.pnl).toFixed(2)}`}
-                      </span>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>

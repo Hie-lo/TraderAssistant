@@ -73,7 +73,8 @@ async def get_initial_bootstrap(
             default_balance=f"{db_user.default_balance:.2f}",
             discipline_badge="سطح انضباط: حرفه‌ای 🛡️",
             status=db_user.status,
-            role=db_user.role
+            role=db_user.role,
+            photo_url=current_user.photo_url
         ),
         config=DynamicAppConfigSchema(
             max_leverage=int(DynamicConfig.get("max_leverage", 2000)),
