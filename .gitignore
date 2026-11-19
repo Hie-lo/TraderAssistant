@@ -28,12 +28,12 @@ ENV/
 *.sqlite3
 
 # Logs & Storage generated files
-logs/*.log
-storage/charts_auto/*.png
-storage/charts_custom/*.webp
-storage/charts_custom/*.png
-storage/charts_custom/*.jpg
+*.log
+backend/logs/*
+!backend/logs/.gitkeep
+storage/charts_auto/*
 !storage/charts_auto/.gitkeep
+storage/charts_custom/*
 !storage/charts_custom/.gitkeep
 
 # Node / React
