@@ -54,6 +54,11 @@ export const api = {
       body: JSON.stringify(patchData),
     }),
 
+  deleteTrade: (tradeId) =>
+    request(`/api/v1/trades/${tradeId}`, {
+      method: "DELETE",
+    }),
+
   uploadTradeChart: (tradeId, file) => {
     const formData = new FormData();
     formData.append("file", file);

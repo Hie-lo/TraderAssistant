@@ -18,6 +18,14 @@ class TradeRepository(BaseRepository[Trade]):
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
+    async def delete_by_id_and_user(self, trade_id: str, user_id: int) -> bool:
+        trade = await self.get_by_id_and_user(trade_id, user_id)
+        if trade:
+            await self.session.delete(trade)
+            await self.session.commit()
+            return True
+        return False
+
     async def list_by_user(self, user_id: int, limit: int = 200) -> List[Trade]:
         stmt = select(Trade).where(Trade.user_id == user_id).order_by(Trade.created_at.desc()).limit(limit)
         res = await self.session.execute(stmt)

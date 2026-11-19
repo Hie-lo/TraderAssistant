@@ -80,6 +80,15 @@ async def test_trades_crud_flow():
         assert updated["status"] == "TP"
         assert "Closed at target" in updated["notes"]
 
+        # 3. Delete trade
+        del_res = await ac.delete(f"/api/v1/trades/{trade_id}", headers=headers)
+        assert del_res.status_code == 200
+        assert del_res.json()["success"] is True
+
+        # Verify not found after delete
+        patch_res2 = await ac.patch(f"/api/v1/trades/{trade_id}", json=patch_payload, headers=headers)
+        assert patch_res2.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_strategies_flow():

@@ -9,6 +9,7 @@ from app.api.deps import get_db, get_current_user, check_heavy_limit
 from app.core.security import AuthenticatedUser
 from app.database.session import AsyncSessionLocal
 from app.models.trade import Trade
+from app.repositories.trade_repo import TradeRepository
 from app.schemas.trade_schema import TradeCreateSchema, TradeUpdateSchema, TradeResponseSchema
 from app.schemas.common import ApiResponse
 from app.services.trade_service import TradeService
@@ -131,3 +132,17 @@ async def upload_custom_chart(
     await db.commit()
 
     return {"success": True, "customChartUrl": new_chart_url}
+
+
+@router.delete("/{trade_id}", response_model=ApiResponse)
+async def delete_trade_entry(
+    trade_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Permanently deletes a trade entry from user's journal."""
+    repo = TradeRepository(db)
+    deleted = await repo.delete_by_id_and_user(trade_id, current_user.id)
+    if not deleted:
+        raise NotFoundError(f"معامله با شناسه {trade_id} یافت نشد.")
+    return ApiResponse(success=True, message="معامله با موفقیت حذف شد.")

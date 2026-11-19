@@ -115,6 +115,25 @@ const App = () => {
 
   // --- 1. Load Initial Bootstrap Data from Backend & Sync Telegram User ---
   useEffect(() => {
+    // Auto-expand window to maximum available dimensions in Telegram Desktop & Mobile
+    if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
+      try {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+        if (typeof window.Telegram.WebApp.requestFullscreen === 'function') {
+          window.Telegram.WebApp.requestFullscreen();
+        }
+        if (window.Telegram.WebApp.setHeaderColor) {
+          window.Telegram.WebApp.setHeaderColor('#020617');
+        }
+        if (window.Telegram.WebApp.setBackgroundColor) {
+          window.Telegram.WebApp.setBackgroundColor('#020617');
+        }
+      } catch (e) {
+        console.warn('Telegram WebApp expand failed:', e);
+      }
+    }
+
     const tg = getTelegramUser();
     if (tg?.first_name) {
       const fullName = tg.last_name ? `${tg.first_name} ${tg.last_name}` : tg.first_name;
@@ -590,6 +609,28 @@ const App = () => {
     setTimeout(() => setDetailSaveToast(false), 2000);
   };
 
+  const handleDeleteTrade = async (tradeId, e) => {
+    if (e) e.stopPropagation();
+    const confirmed = window.confirm('آیا از حذف این معامله از ژورنال اطمینان دارید؟');
+    if (!confirmed) return;
+
+    try {
+      await api.deleteTrade(tradeId);
+      setTrades((prev) => prev.filter((t) => t.id !== tradeId));
+      if (selectedTradeId === tradeId) {
+        setSelectedTradeId(null);
+        setDraftTrade(null);
+      }
+    } catch (err) {
+      console.warn('Failed to delete trade on backend, removing locally:', err);
+      setTrades((prev) => prev.filter((t) => t.id !== tradeId));
+      if (selectedTradeId === tradeId) {
+        setSelectedTradeId(null);
+        setDraftTrade(null);
+      }
+    }
+  };
+
   const toggleInfoPopover = (key, e) => {
     e.stopPropagation();
     setActiveInfoKey((prev) => (prev === key ? null : key));
@@ -906,7 +947,7 @@ const App = () => {
     <div
       dir="rtl"
       onClick={() => setActiveInfoKey(null)}
-      className="min-h-[100dvh] w-full bg-slate-950 text-gray-200 font-sans flex justify-center items-stretch sm:items-center p-0 sm:p-4 md:p-6 select-none overflow-x-hidden"
+      className="h-[100dvh] w-full bg-slate-950 text-gray-200 font-sans flex justify-center items-center p-0 select-none overflow-hidden"
     >
       {/* Global CSS Reset for Number Input Spinners & Custom Scrollbars */}
       <style>{`
@@ -928,12 +969,12 @@ const App = () => {
         }
       `}</style>
 
-      {/* Responsive App Shell: Full-screen on mobile/Mini-App, scaled card on Tablet/Desktop */}
-      <div className="w-full max-w-full sm:max-w-lg md:max-w-2xl lg:max-w-4xl bg-gray-900 sm:border border-gray-800 sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative min-h-[100dvh] sm:min-h-[720px] sm:max-h-[92dvh]">
+      {/* Responsive App Shell: Full-height pinned dock on mobile & Telegram Desktop */}
+      <div className="w-full h-full max-w-full sm:max-w-xl md:max-w-3xl lg:max-w-4xl bg-gray-900 sm:border-x border-gray-800/80 shadow-2xl overflow-hidden flex flex-col relative">
         
         {/* ==================== TAB 0: HOME DASHBOARD (صفحه اصلی) ==================== */}
         {activeTab === 'home' && (
-          <div className="p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-28 flex-1 overflow-y-auto space-y-4 sm:space-y-5">
+          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 sm:space-y-5 pb-6">
             {/* Top Welcome Header */}
             <div className="flex items-center justify-between gap-2 bg-gray-950/70 p-3 sm:p-4 rounded-2xl border border-gray-800/80">
               <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
@@ -1169,9 +1210,9 @@ const App = () => {
 
         {/* ==================== TAB 1: RISK CALCULATOR ==================== */}
         {activeTab === 'calc' && (
-          <>
+          <div className="flex-1 flex flex-col overflow-hidden">
             {/* Pair Selector & Live Price Header */}
-            <div className="bg-gray-950/90 px-3.5 sm:px-5 py-3 sm:py-3.5 border-b border-gray-800 flex justify-between items-center gap-2 relative z-20">
+            <div className="shrink-0 bg-gray-950/90 px-3.5 sm:px-5 py-3 sm:py-3.5 border-b border-gray-800 flex justify-between items-center gap-2 relative z-20">
               <div className="relative">
                 <button
                   onClick={() => setIsPairDropdownOpen(!isPairDropdownOpen)}
@@ -1243,7 +1284,7 @@ const App = () => {
             </div>
 
             {/* Calculator Form Body */}
-            <div className="p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-28 flex-1 overflow-y-auto space-y-4">
+            <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
               
               {/* Long / Short Direction Toggle */}
               <div className="grid grid-cols-2 gap-2 bg-gray-950 p-1.5 rounded-xl border border-gray-800">
@@ -1633,12 +1674,12 @@ const App = () => {
                 )}
               </button>
             </div>
-          </>
+          </div>
         )}
 
         {/* ==================== TAB 2: TRADE JOURNAL ==================== */}
         {activeTab === 'journal' && !draftTrade && (
-          <div className="p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-28 flex-1 overflow-y-auto space-y-4" onClick={() => setOpenStatusMenuId(null)}>
+          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6" onClick={() => setOpenStatusMenuId(null)}>
             {/* Mini Portfolio Analytics Header */}
             <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-gray-950 p-3 sm:p-4 rounded-xl border border-gray-800">
               <div className="text-center">
@@ -1716,8 +1757,8 @@ const App = () => {
                         </div>
                       </div>
 
-                      {/* Left: Interactive Status Button & Popover Box */}
-                      <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+                      {/* Left: Interactive Status Button, Delete Button & Popover Box */}
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => setOpenStatusMenuId(openStatusMenuId === trade.id ? null : trade.id)}
@@ -1725,6 +1766,15 @@ const App = () => {
                         >
                           {resultMeta.badge}
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTrade(trade.id, e)}
+                          className="w-7 h-7 rounded-lg bg-gray-900 hover:bg-rose-500/20 text-gray-500 hover:text-rose-400 border border-gray-800 flex items-center justify-center transition-colors"
+                          title="حذف معامله"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                         </button>
 
                         {/* Animated Popover Button Box for TP / SL / Draw */}
@@ -1785,7 +1835,7 @@ const App = () => {
 
         {/* ==================== LAYER 2: TRADE DETAIL VIEW ==================== */}
         {activeTab === 'journal' && draftTrade && (
-          <div className="p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-28 flex-1 overflow-y-auto space-y-4">
+          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
               <button
                 type="button"
@@ -2153,16 +2203,16 @@ const App = () => {
               </div>
             </div>
 
-            {/* Dynamic Save Button (Appears when changes are made or recently saved) */}
-            {(hasUnsavedChanges || detailSaveToast) && (
-              <div className="pt-2">
+            {/* Action Buttons: Save & Delete Trade */}
+            <div className="pt-2 flex items-center gap-2">
+              {(hasUnsavedChanges || detailSaveToast) ? (
                 <button
                   type="button"
                   onClick={handleSaveDraftChanges}
-                  className={`w-full py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all ${
+                  className={`flex-1 py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-all ${
                     detailSaveToast
                       ? 'bg-emerald-600 text-white shadow-emerald-900/30'
-                      : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/40 animate-bounce'
+                      : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/40'
                   }`}
                 >
                   {detailSaveToast ? (
@@ -2177,14 +2227,26 @@ const App = () => {
                     </>
                   )}
                 </button>
-              </div>
-            )}
+              ) : (
+                <div className="flex-1"></div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => handleDeleteTrade(draftTrade.id)}
+                className="px-4 py-3 sm:py-3.5 rounded-xl font-bold text-xs sm:text-sm bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 text-rose-400 hover:text-rose-300 flex items-center justify-center gap-1.5 transition-all shrink-0 active:scale-95"
+                title="حذف معامله از ژورنال"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                <span>حذف معامله</span>
+              </button>
+            </div>
           </div>
         )}
 
         {/* ==================== TAB 3: PORTFOLIO ANALYTICS (پورتفولیو) ==================== */}
         {activeTab === 'portfolio' && (
-          <div className="p-3.5 sm:p-5 md:p-6 pb-28 sm:pb-28 flex-1 overflow-y-auto space-y-4">
+          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
               <div>
                 <h2 className="text-sm sm:text-base font-extrabold text-white">پورتفولیو و تحلیل عملکرد</h2>
@@ -2268,7 +2330,7 @@ const App = () => {
 
         {/* ==================== TAB 4: EMPTY PLACEHOLDER SLOT ==================== */}
         {activeTab === 'empty' && (
-          <div className="p-6 pb-28 flex-1 flex flex-col items-center justify-center text-center space-y-3">
+          <div className="p-6 flex-1 flex flex-col items-center justify-center text-center space-y-3 pb-6">
             <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gray-950 border border-dashed border-gray-700 flex items-center justify-center text-gray-500">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
             </div>
@@ -2280,7 +2342,7 @@ const App = () => {
         )}
 
         {/* ==================== BOTTOM NAVIGATION BAR (DOCK) ==================== */}
-        <div className="fixed sm:absolute bottom-0 inset-x-0 bg-gray-950/95 backdrop-blur-md border-t border-gray-800/90 px-2 sm:px-4 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] z-30">
+        <div className="shrink-0 bg-gray-950/95 backdrop-blur-md border-t border-gray-800/90 px-2 sm:px-4 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] z-30">
           <div className="max-w-md mx-auto grid grid-cols-5 items-end">
             
             {/* 1. Far Right: Journal (ژورنال) */}
