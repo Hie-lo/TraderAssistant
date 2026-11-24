@@ -248,11 +248,11 @@ const App = () => {
 
   // --- Filtered Pairs for Search ---
   const filteredPairs = useMemo(() => {
-    return PAIRS.filter((p) =>
+    return (pairs || FALLBACK_PAIRS).filter((p) =>
       p.label.toLowerCase().includes(pairSearch.toLowerCase()) ||
       p.base.toLowerCase().includes(pairSearch.toLowerCase())
     );
-  }, [pairSearch]);
+  }, [pairs, pairSearch]);
 
   // --- Filtered General Strategies for Search Bar ---
   const filteredGeneralStrategies = useMemo(() => {
