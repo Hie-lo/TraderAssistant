@@ -50,7 +50,7 @@ services:
     container_name: trading_frontend
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "${FRONTEND_PORT:-80}:80"
 
 volumes:
   postgres_data:
