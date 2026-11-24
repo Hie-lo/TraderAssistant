@@ -52,6 +52,68 @@ const INFO_TOOLTIPS = {
 
 
 
+const EXTRA_PAIR_META = {
+  DOGEUSDT: { icon: 'Ð', color: 'text-amber-300 bg-amber-500/10' },
+  ADAUSDT: { icon: '₳', color: 'text-sky-400 bg-sky-500/10' },
+  AVAXUSDT: { icon: '▲', color: 'text-rose-400 bg-rose-500/10' },
+  LINKUSDT: { icon: '⬡', color: 'text-blue-400 bg-blue-500/10' },
+  SUIUSDT: { icon: '💧', color: 'text-cyan-400 bg-cyan-500/10' },
+  PEPEUSDT: { icon: '🐸', color: 'text-emerald-400 bg-emerald-500/10' },
+  TRXUSDT: { icon: '◈', color: 'text-red-400 bg-red-500/10' },
+  LTCUSDT: { icon: 'Ł', color: 'text-slate-300 bg-slate-500/10' }
+};
+
+const PAIR_META_MAP = FALLBACK_PAIRS.reduce((acc, p) => {
+  acc[p.symbol] = { icon: p.icon, color: p.color, step: p.step };
+  return acc;
+}, { ...EXTRA_PAIR_META });
+
+const DYNAMIC_BADGE_COLORS = [
+  'text-blue-400 bg-blue-500/10',
+  'text-emerald-400 bg-emerald-500/10',
+  'text-purple-400 bg-purple-500/10',
+  'text-amber-400 bg-amber-500/10',
+  'text-cyan-400 bg-cyan-500/10',
+  'text-rose-400 bg-rose-500/10'
+];
+
+const formatPairPrice = (raw) => {
+  const num = parseFloat(raw);
+  if (isNaN(num) || num <= 0) return '0.00';
+  if (num < 0.001) return num.toFixed(8);
+  if (num < 0.1) return num.toFixed(6);
+  if (num < 10) return num.toFixed(4);
+  return num.toFixed(2);
+};
+
+const inferPriceStep = (raw) => {
+  const num = parseFloat(raw);
+  if (isNaN(num) || num <= 0) return 1;
+  if (num >= 10000) return 50;
+  if (num >= 1000) return 5;
+  if (num >= 100) return 1;
+  if (num >= 10) return 0.1;
+  if (num >= 1) return 0.01;
+  if (num >= 0.01) return 0.001;
+  if (num >= 0.0001) return 0.00001;
+  return 0.0000001;
+};
+
+const buildDynamicPair = (symbol, rawPrice) => {
+  const base = symbol.replace(/USDT$/, '');
+  const meta = PAIR_META_MAP[symbol];
+  const colorIdx = base.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % DYNAMIC_BADGE_COLORS.length;
+  return {
+    symbol,
+    label: `${base} / USDT`,
+    base,
+    icon: meta?.icon || base.slice(0, 2),
+    color: meta?.color || DYNAMIC_BADGE_COLORS[colorIdx],
+    defaultPrice: formatPairPrice(rawPrice),
+    step: meta?.step || inferPriceStep(rawPrice)
+  };
+};
+
 const getTelegramUser = () => {
   try {
     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
@@ -76,6 +138,11 @@ const App = () => {
 
   // --- Dynamic Pairs & Strategies from Backend ---
   const [pairs, setPairs] = useState(FALLBACK_PAIRS);
+  const [pairsLoading, setPairsLoading] = useState(false);
+  const [marketPrices, setMarketPrices] = useState({});
+  const marketPricesRef = useRef({});
+  const exchangePairsLoadedRef = useRef(false);
+  const activePairsSetRef = useRef(new Set(FALLBACK_PAIRS.map((p) => p.symbol)));
   const [defaultStrategies, setDefaultStrategies] = useState(FALLBACK_STRATEGIES);
   const [customStrategies, setCustomStrategies] = useState([]);
   const [maxLeverageLimit, setMaxLeverageLimit] = useState(2000);
@@ -155,10 +222,17 @@ const App = () => {
         if (data.user?.default_balance) {
           setBalance(data.user.default_balance);
         }
-        if (data.config?.pairs?.length > 0) {
-          setPairs(data.config.pairs);
-          setSelectedPair(data.config.pairs[0]);
-          setLivePrice(data.config.pairs[0].default_price || '64250.00');
+        if (data.config?.pairs?.length > 0 && !exchangePairsLoadedRef.current) {
+          const normalizedPairs = data.config.pairs.map((p) => ({
+            ...p,
+            defaultPrice: p.defaultPrice || p.default_price || '0.00',
+            step: p.step || inferPriceStep(p.defaultPrice || p.default_price)
+          }));
+          setPairs(normalizedPairs);
+          setSelectedPair((prev) => normalizedPairs.find((p) => p.symbol === prev.symbol) || normalizedPairs[0]);
+          // Bootstrap fallback pair price handled above if exchange pairs not yet loaded
+          // Keep selectedPair synchronized
+          setLivePrice((prev) => prev || data.config.pairs[0].default_price || '64250.00');
         }
         if (data.config?.default_strategies?.length > 0) {
           setDefaultStrategies(data.config.default_strategies);
@@ -209,23 +283,157 @@ const App = () => {
     isDraggingTickerRef.current = false;
   };
 
-  // --- Connect to Binance WebSocket for Selected Pair ---
+  // --- Keep active pair symbol set synced for fast !miniTicker@arr filtering ---
   useEffect(() => {
-    setLivePrice(selectedPair.defaultPrice);
+    activePairsSetRef.current = new Set((pairs || FALLBACK_PAIRS).map((p) => p.symbol));
+  }, [pairs]);
+
+  // --- Fetch All Active Trading Pairs Dynamically from Binance Exchange API ---
+  useEffect(() => {
+    const controller = new AbortController();
+    let isCancelled = false;
+
+    const fetchDynamicPairs = async () => {
+      setPairsLoading(true);
+      const endpoints = [
+        'https://api.binance.com/api/v3/ticker/24hr',
+        'https://data-api.binance.vision/api/v3/ticker/24hr'
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          if (!res.ok) continue;
+          const tickers = await res.json();
+          if (!Array.isArray(tickers) || isCancelled) return;
+
+          const excludedRegex = /^(USDC|FDUSD|TUSD|USDP|BUSD|DAI|EUR|GBP|AUD|TRY|BRL|ARS|PAXG|AEUR|USDE|EURI)USDT$|.*(UP|DOWN|BULL|BEAR)USDT$/i;
+          const activeUsdtPairs = tickers
+            .filter((t) => {
+              if (!t?.symbol || !t.symbol.endsWith('USDT')) return false;
+              if (excludedRegex.test(t.symbol)) return false;
+              const price = parseFloat(t.lastPrice);
+              const vol = parseFloat(t.quoteVolume);
+              return !isNaN(price) && price > 0 && !isNaN(vol) && vol > 100000;
+            })
+            .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+            .slice(0, 300)
+            .map((t) => {
+              const pairObj = buildDynamicPair(t.symbol, t.lastPrice);
+              marketPricesRef.current[t.symbol] = pairObj.defaultPrice;
+              return pairObj;
+            });
+
+          if (activeUsdtPairs.length > 0 && !isCancelled) {
+            exchangePairsLoadedRef.current = true;
+            setPairs(activeUsdtPairs);
+            setMarketPrices({ ...marketPricesRef.current });
+            setSelectedPair((prev) => activeUsdtPairs.find((p) => p.symbol === prev.symbol) || activeUsdtPairs[0]);
+            return;
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+      if (!isCancelled) {
+        console.warn('Dynamic exchange pair fetch failed, keeping fallback list.');
+      }
+    };
+
+    fetchDynamicPairs().finally(() => {
+      if (!isCancelled) setPairsLoading(false);
+    });
+
+    return () => {
+      isCancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  // --- Combined All-Market Live Ticker Stream (!miniTicker@arr) for Dropdown & Home Strip ---
+  useEffect(() => {
+    let isCancelled = false;
+    let tickerWs = null;
+
+    try {
+      tickerWs = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+      tickerWs.onmessage = (event) => {
+        if (isCancelled) return;
+        try {
+          const items = JSON.parse(event.data);
+          if (!Array.isArray(items)) return;
+          const activeSet = activePairsSetRef.current;
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item?.s && activeSet.has(item.s)) {
+              const formatted = formatPairPrice(item.c);
+              if (formatted !== '0.00') {
+                marketPricesRef.current[item.s] = formatted;
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore malformed ticker payload
+        }
+      };
+      tickerWs.onerror = () => {};
+    } catch (e) {
+      // Fallback gracefully if stream blocked
+    }
+
+    return () => {
+      isCancelled = true;
+      if (tickerWs) {
+        tickerWs.onopen = null;
+        tickerWs.onmessage = null;
+        tickerWs.onerror = null;
+        tickerWs.onclose = null;
+        if (tickerWs.readyState === WebSocket.OPEN || tickerWs.readyState === WebSocket.CONNECTING) {
+          tickerWs.close();
+        }
+      }
+    };
+  }, []);
+
+  // --- Flush Cached Market Prices to UI Only When Dropdown or Home Strip Is Visible ---
+  useEffect(() => {
+    if (!isPairDropdownOpen && activeTab !== 'home') return;
+    setMarketPrices({ ...marketPricesRef.current });
+    const interval = setInterval(() => {
+      setMarketPrices({ ...marketPricesRef.current });
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [isPairDropdownOpen, activeTab]);
+
+  // --- Connect to Binance WebSocket for Selected Pair (Race-Condition Safe) ---
+  useEffect(() => {
+    let isCancelled = false;
+    const currentSymbol = selectedPair.symbol;
+    const initialPrice =
+      marketPricesRef.current[currentSymbol] ||
+      selectedPair.defaultPrice ||
+      selectedPair.default_price ||
+      '0.00';
+    setLivePrice(initialPrice);
     setPriceColor('text-gray-200');
 
     let ws;
     try {
-      const streamSymbol = selectedPair.symbol.toLowerCase();
+      const streamSymbol = currentSymbol.toLowerCase();
       ws = new WebSocket(`wss://stream.binance.com:9443/ws/${streamSymbol}@trade`);
 
       ws.onmessage = (event) => {
+        if (isCancelled) return;
         try {
           const data = JSON.parse(event.data);
+          if (!data || data.s !== currentSymbol) return;
           const rawPrice = parseFloat(data.p);
-          const formatted = rawPrice < 10 ? rawPrice.toFixed(4) : rawPrice.toFixed(2);
+          if (isNaN(rawPrice) || rawPrice <= 0) return;
+          const formatted = formatPairPrice(rawPrice);
+          marketPricesRef.current[currentSymbol] = formatted;
 
           setLivePrice((prev) => {
+            if (isCancelled) return prev;
             const prevNum = parseFloat(prev);
             if (!isNaN(prevNum)) {
               if (rawPrice > prevNum) setPriceColor('text-emerald-400');
@@ -242,16 +450,29 @@ const App = () => {
     }
 
     return () => {
-      if (ws && ws.readyState === 1) ws.close();
+      isCancelled = true;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      }
     };
-  }, [selectedPair]);
+  }, [selectedPair.symbol]);
 
   // --- Filtered Pairs for Search ---
   const filteredPairs = useMemo(() => {
-    return (pairs || FALLBACK_PAIRS).filter((p) =>
-      p.label.toLowerCase().includes(pairSearch.toLowerCase()) ||
-      p.base.toLowerCase().includes(pairSearch.toLowerCase())
-    );
+    const list = pairs || FALLBACK_PAIRS;
+    const q = pairSearch.trim().toLowerCase();
+    if (!q) return list.slice(0, 50);
+    return list.filter((p) =>
+      p.symbol?.toLowerCase().includes(q) ||
+      p.label?.toLowerCase().includes(q) ||
+      p.base?.toLowerCase().includes(q)
+    ).slice(0, 80);
   }, [pairs, pairSearch]);
 
   // --- Filtered General Strategies for Search Bar ---
@@ -348,8 +569,10 @@ const App = () => {
 
   // --- Step Price Helper (Starts from Live Price if empty) ---
   const adjustPriceField = (currentValue, setter, direction) => {
-    const step = selectedPair.step || 1;
-    const decimals = step < 0.01 ? 4 : step < 1 ? 2 : 2;
+    const step = selectedPair.step || inferPriceStep(livePrice);
+    const stepStr = step.toString();
+    const decimals = stepStr.includes('.') ? stepStr.split('.')[1].length : 2;
+    // decimals computed dynamically above
     const baseNum =
       currentValue !== '' && !isNaN(parseFloat(currentValue))
         ? parseFloat(currentValue)
@@ -1088,9 +1311,9 @@ const App = () => {
                 onMouseLeave={handleTickerMouseUpOrLeave}
                 className="flex gap-2 sm:gap-2.5 overflow-x-auto pb-1 no-scrollbar cursor-grab active:cursor-grabbing select-none"
               >
-                {pairs.map((pair) => {
+                {pairs.slice(0, 15).map((pair) => {
                   const isCurrent = selectedPair.symbol === pair.symbol;
-                  const displayPrice = isCurrent ? livePrice : pair.defaultPrice;
+                  const displayPrice = isCurrent ? livePrice : (marketPrices[pair.symbol] || pair.defaultPrice);
                   return (
                     <button
                       key={pair.symbol}
@@ -1245,7 +1468,14 @@ const App = () => {
                       <svg width="13" height="13" className="text-gray-500 absolute right-2.5 top-1/2 -translate-y-1/2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </div>
                     <div className="max-h-48 overflow-y-auto space-y-1">
-                      {filteredPairs.map((pair) => (
+                      {pairsLoading && pairs.length <= FALLBACK_PAIRS.length && (
+                        <div className="text-[10px] text-gray-500 text-center py-1">در حال دریافت جفت‌ارزهای بازار...</div>
+                      )}
+                      {filteredPairs.length === 0 ? (
+                        <div className="text-xs text-gray-500 text-center py-4">جفت‌ارزی با این نام یافت نشد</div>
+                      ) : filteredPairs.map((pair) => {
+                        const rowPrice = pair.symbol === selectedPair.symbol ? livePrice : (marketPrices[pair.symbol] || pair.defaultPrice);
+                        return (
                         <button
                           key={pair.symbol}
                           onClick={() => {
@@ -1261,12 +1491,13 @@ const App = () => {
                           }`}
                         >
                           <span className="flex items-center gap-2">
-                            <span className={`w-5 h-5 rounded flex items-center justify-center text-xs ${pair.color}`}>{pair.icon}</span>
+                            <span className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 ${pair.color}`}>{pair.icon}</span>
                             {pair.label}
                           </span>
-                          <span className="font-mono text-[11px] text-gray-400">${pair.defaultPrice}</span>
+                          <span dir="ltr" className="font-mono text-[11px] text-gray-300">${rowPrice}</span>
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
