@@ -120,8 +120,8 @@ const App = () => {
       try {
         window.Telegram.WebApp.ready();
         window.Telegram.WebApp.expand();
-        if (typeof window.Telegram.WebApp.requestFullscreen === 'function') {
-          window.Telegram.WebApp.requestFullscreen();
+        if (window.Telegram.WebApp.isFullscreen && typeof window.Telegram.WebApp.exitFullscreen === 'function') {
+          window.Telegram.WebApp.exitFullscreen();
         }
         if (window.Telegram.WebApp.setHeaderColor) {
           window.Telegram.WebApp.setHeaderColor('#020617');
@@ -947,7 +947,7 @@ const App = () => {
     <div
       dir="rtl"
       onClick={() => setActiveInfoKey(null)}
-      className="h-[100dvh] w-full bg-slate-950 text-gray-200 font-sans flex justify-center items-center p-0 select-none overflow-hidden"
+      style={{ height: 'var(--tg-viewport-height, 100dvh)' }} className="h-[100dvh] w-full bg-slate-950 text-gray-200 font-sans flex justify-center items-center p-0 select-none overflow-hidden"
     >
       {/* Global CSS Reset for Number Input Spinners & Custom Scrollbars */}
       <style>{`
@@ -970,11 +970,11 @@ const App = () => {
       `}</style>
 
       {/* Responsive App Shell: Full-height pinned dock on mobile & Telegram Desktop */}
-      <div className="w-full h-full max-w-full sm:max-w-xl md:max-w-3xl lg:max-w-4xl bg-gray-900 sm:border-x border-gray-800/80 shadow-2xl overflow-hidden flex flex-col relative">
+      <div style={{ paddingTop: 'calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px))' }} className="w-full h-full max-w-full sm:max-w-xl md:max-w-3xl lg:max-w-4xl bg-gray-900 sm:border-x border-gray-800/80 shadow-2xl overflow-hidden flex flex-col relative">
         
         {/* ==================== TAB 0: HOME DASHBOARD (صفحه اصلی) ==================== */}
         {activeTab === 'home' && (
-          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 sm:space-y-5 pb-6">
+          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 sm:space-y-5 pb-6">
             {/* Top Welcome Header */}
             <div className="flex items-center justify-between gap-2 bg-gray-950/70 p-3 sm:p-4 rounded-2xl border border-gray-800/80">
               <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
@@ -996,10 +996,10 @@ const App = () => {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-1">
                     <span className="text-[11px] sm:text-xs text-gray-400">خوش آمدی،</span>
-                    <span className="text-xs sm:text-sm font-extrabold text-white truncate">{userName} عزیز 👋</span>
+                    <span className="text-xs sm:text-sm font-extrabold text-white truncate max-w-full">{userName} عزیز 👋</span>
                   </div>
                   <div className="flex items-center gap-1.5 mt-1">
-                    <span className="text-[9px] sm:text-[10px] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-medium">
+                    <span className="text-[9px] sm:text-[10px] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">
                       سطح انضباط: حرفه‌ای 🛡️
                     </span>
                   </div>
@@ -1009,7 +1009,7 @@ const App = () => {
               <button
                 type="button"
                 onClick={() => setActiveTab('calc')}
-                className="shrink-0 bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-400 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
+                className="shrink-0 whitespace-nowrap bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-400 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
               >
                 <span>+ ترید جدید</span>
               </button>
@@ -1118,15 +1118,15 @@ const App = () => {
             {/* Active Strategy Spotlight */}
             <div
               onClick={() => setActiveTab('portfolio')}
-              className="bg-gradient-to-l from-purple-950/30 via-gray-950 to-gray-950 border border-purple-500/25 rounded-2xl p-3 sm:p-4 flex items-center justify-between cursor-pointer hover:border-purple-500/50 transition-all"
+              className="bg-gradient-to-l from-purple-950/30 via-gray-950 to-gray-950 border border-purple-500/25 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2 cursor-pointer hover:border-purple-500/50 transition-all"
             >
-              <div className="flex items-center gap-2.5 sm:gap-3">
+              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                 <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                 </div>
                 <div>
                   <span className="text-[10px] sm:text-xs text-gray-400 block">بهترین استراتژی ثبت‌شده شما</span>
-                  <span className="text-xs sm:text-sm font-bold text-white">{journalStats.bestStrategy}</span>
+                  <span className="text-xs sm:text-sm font-bold text-white block truncate">{journalStats.bestStrategy}</span>
                 </div>
               </div>
               <div className="flex items-center gap-1 text-[10px] sm:text-xs text-purple-400 font-bold shrink-0">
@@ -1210,7 +1210,7 @@ const App = () => {
 
         {/* ==================== TAB 1: RISK CALCULATOR ==================== */}
         {activeTab === 'calc' && (
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             {/* Pair Selector & Live Price Header */}
             <div className="shrink-0 bg-gray-950/90 px-3.5 sm:px-5 py-3 sm:py-3.5 border-b border-gray-800 flex justify-between items-center gap-2 relative z-20">
               <div className="relative">
@@ -1284,7 +1284,7 @@ const App = () => {
             </div>
 
             {/* Calculator Form Body */}
-            <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
+            <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6">
               
               {/* Long / Short Direction Toggle */}
               <div className="grid grid-cols-2 gap-2 bg-gray-950 p-1.5 rounded-xl border border-gray-800">
@@ -1347,12 +1347,12 @@ const App = () => {
 
                 {/* Risk Input with % / $ Small Top Buttons */}
                 <div className="space-y-1.5">
-                  <div className="flex justify-between items-center h-6">
+                  <div className="flex justify-between items-center gap-1 h-6">
                     <label className="text-xs font-medium text-gray-400 flex items-center gap-1">
                       مقدار ریسک
-                      {renderInfoButton('risk', 'left')}
+                      {renderInfoButton('risk', 'center')}
                     </label>
-                    <div className="flex bg-gray-950 p-0.5 rounded-lg border border-gray-800">
+                    <div className="flex bg-gray-950 p-0.5 rounded-lg border border-gray-800 shrink-0">
                       <button
                         type="button"
                         onClick={() => handleRiskTypeToggle('%')}
@@ -1398,7 +1398,7 @@ const App = () => {
               {/* Leverage Input (1 to 2000) + Quick Slider */}
               <div className="bg-gray-950 p-3 sm:p-4 rounded-xl border border-gray-800 space-y-2.5">
                 <div className="flex justify-between items-center gap-2">
-                  <label className="text-xs font-medium text-gray-400 flex items-center gap-1.5">
+                  <label className="text-xs font-medium text-gray-400 flex items-center gap-1.5 min-w-0">
                     <span>اهرم معاملاتی (1x - 2000x)</span>
                     {renderInfoButton('leverage', 'right')}
                   </label>
@@ -1410,7 +1410,7 @@ const App = () => {
                       max="2000"
                       value={leverage}
                       onChange={(e) => handleLeverageInput(e.target.value)}
-                      className="w-20 bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg pl-2 pr-5 py-1 text-center font-mono text-xs font-bold text-blue-400 outline-none"
+                      className="w-16 sm:w-20 bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-lg pl-2 pr-5 py-1 text-center font-mono text-xs font-bold text-blue-400 outline-none"
                     />
                     <span className="absolute right-2 text-[11px] font-mono text-gray-500">x</span>
                   </div>
@@ -1609,9 +1609,9 @@ const App = () => {
                 </div>
 
                 {/* Compact 3-Column Row Underneath */}
-                <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
                   {/* Position Size */}
-                  <div className="bg-gray-900/80 p-2.5 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
+                  <div className="bg-gray-900/80 p-2 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
                     <div className="flex items-center justify-between text-gray-400 text-[10px] sm:text-xs mb-1">
                       <span className="truncate">حجم ({selectedPair.base})</span>
                       {renderInfoButton('size', 'right')}
@@ -1622,7 +1622,7 @@ const App = () => {
                   </div>
 
                   {/* Total Position Value */}
-                  <div className="bg-gray-900/80 p-2.5 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
+                  <div className="bg-gray-900/80 p-2 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
                     <div className="flex items-center justify-between text-gray-400 text-[10px] sm:text-xs mb-1">
                       <span className="truncate">ارزش کل</span>
                       {renderInfoButton('value', 'center')}
@@ -1633,7 +1633,7 @@ const App = () => {
                   </div>
 
                   {/* Risk / Reward */}
-                  <div className="bg-gray-900/80 p-2.5 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
+                  <div className="bg-gray-900/80 p-2 sm:p-3 rounded-xl border border-gray-800/70 flex flex-col justify-between">
                     <div className="flex items-center justify-between text-gray-400 text-[10px] sm:text-xs mb-1">
                       <span>R / R</span>
                       {renderInfoButton('rr', 'left')}
@@ -1679,7 +1679,7 @@ const App = () => {
 
         {/* ==================== TAB 2: TRADE JOURNAL ==================== */}
         {activeTab === 'journal' && !draftTrade && (
-          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6" onClick={() => setOpenStatusMenuId(null)}>
+          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6" onClick={() => setOpenStatusMenuId(null)}>
             {/* Mini Portfolio Analytics Header */}
             <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-gray-950 p-3 sm:p-4 rounded-xl border border-gray-800">
               <div className="text-center">
@@ -1758,7 +1758,7 @@ const App = () => {
                       </div>
 
                       {/* Left: Interactive Status Button, Delete Button & Popover Box */}
-                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <div className="relative flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => setOpenStatusMenuId(openStatusMenuId === trade.id ? null : trade.id)}
@@ -1835,7 +1835,7 @@ const App = () => {
 
         {/* ==================== LAYER 2: TRADE DETAIL VIEW ==================== */}
         {activeTab === 'journal' && draftTrade && (
-          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
+          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
               <button
                 type="button"
@@ -1932,7 +1932,7 @@ const App = () => {
 
                 <div className="flex items-center gap-1.5">
                   {(draftTrade.hasChartSnapshot || draftTrade.customChartUrl) && !draftTrade.customChartUrl && (
-                    <div className="flex bg-gray-950 p-0.5 rounded-lg border border-gray-800">
+                    <div className="flex bg-gray-950 p-0.5 rounded-lg border border-gray-800 shrink-0">
                       {['15m', '1H', '4H'].map((tf) => (
                         <button
                           key={tf}
@@ -2055,17 +2055,17 @@ const App = () => {
               <button
                 type="button"
                 onClick={() => setIsStrategyBarOpen(!isStrategyBarOpen)}
-                className="w-full bg-gray-950 hover:bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 sm:py-3 flex items-center justify-between transition-colors"
+                className="w-full bg-gray-950 hover:bg-gray-900 border border-gray-800 rounded-xl px-3.5 py-2.5 sm:py-3 flex items-center justify-between gap-2 transition-colors"
               >
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                  <span className="text-xs sm:text-sm font-bold text-white">{draftTrade.strategy}</span>
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
+                  <span className="text-xs sm:text-sm font-bold text-white truncate">{draftTrade.strategy}</span>
                   {customStrategies.includes(draftTrade.strategy) && (
-                    <span className="text-[9px] sm:text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded">شخصی</span>
+                    <span className="text-[9px] sm:text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded shrink-0">شخصی</span>
                   )}
                 </div>
-                <div className="flex items-center gap-1 text-[10px] sm:text-xs text-gray-400">
-                  <span>{isStrategyBarOpen ? 'بستن لیست' : 'مدیریت یا جستجوی استراتژی'}</span>
+                <div className="flex items-center gap-1 text-[10px] sm:text-xs text-gray-400 shrink-0">
+                  <span className="sm:hidden">{isStrategyBarOpen ? 'بستن' : 'تغییر'}</span><span className="hidden sm:inline">{isStrategyBarOpen ? 'بستن لیست' : 'مدیریت یا جستجوی استراتژی'}</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${isStrategyBarOpen ? 'rotate-180' : ''}`}><polyline points="6 9 12 15 18 9"/></svg>
                 </div>
               </button>
@@ -2246,7 +2246,7 @@ const App = () => {
 
         {/* ==================== TAB 3: PORTFOLIO ANALYTICS (پورتفولیو) ==================== */}
         {activeTab === 'portfolio' && (
-          <div className="p-3.5 sm:p-5 flex-1 overflow-y-auto space-y-4 pb-6">
+          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
               <div>
                 <h2 className="text-sm sm:text-base font-extrabold text-white">پورتفولیو و تحلیل عملکرد</h2>
@@ -2330,7 +2330,7 @@ const App = () => {
 
         {/* ==================== TAB 4: EMPTY PLACEHOLDER SLOT ==================== */}
         {activeTab === 'empty' && (
-          <div className="p-6 flex-1 flex flex-col items-center justify-center text-center space-y-3 pb-6">
+          <div className="p-6 flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center text-center space-y-3 pb-6">
             <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gray-950 border border-dashed border-gray-700 flex items-center justify-center text-gray-500">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
             </div>
@@ -2375,11 +2375,11 @@ const App = () => {
             </button>
 
             {/* 3. Center (Larger & Prominent): Home (صفحه اصلی) */}
-            <div className="flex flex-col items-center justify-center relative -top-3">
+            <div className="flex flex-col items-center justify-end py-1">
               <button
                 type="button"
                 onClick={() => { setActiveTab('home'); setSelectedTradeId(null); }}
-                className={`w-12 h-12 sm:w-13 sm:h-13 rounded-2xl flex items-center justify-center transition-all border-4 border-gray-900 shadow-xl ${
+                className={`-mt-4 w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center transition-all border-4 border-gray-900 shadow-xl ${
                   activeTab === 'home'
                     ? 'bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-blue-500/40 scale-105'
                     : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
@@ -2387,7 +2387,7 @@ const App = () => {
               >
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
               </button>
-              <span className={`text-[10px] sm:text-[11px] font-extrabold mt-0.5 ${activeTab === 'home' ? 'text-blue-400' : 'text-gray-400'}`}>
+              <span className={`text-[10px] sm:text-[11px] font-extrabold mt-1 ${activeTab === 'home' ? 'text-blue-400' : 'text-gray-400'}`}>
                 صفحه اصلی
               </span>
             </div>

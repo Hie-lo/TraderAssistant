@@ -11,8 +11,8 @@
         if (window.Telegram && window.Telegram.WebApp) {
           window.Telegram.WebApp.ready();
           window.Telegram.WebApp.expand();
-          if (typeof window.Telegram.WebApp.requestFullscreen === 'function') {
-            window.Telegram.WebApp.requestFullscreen();
+          if (window.Telegram.WebApp.isFullscreen && typeof window.Telegram.WebApp.exitFullscreen === 'function') {
+            window.Telegram.WebApp.exitFullscreen();
           }
         }
       } catch (e) {}
