@@ -17,7 +17,7 @@ from app.services.chart_service import ChartService
 from app.services.channel_service import ChannelService
 from app.services.market_service import MarketService
 from app.services.risk_guard_service import RiskGuardService
-from app.core.exceptions import NotFoundError, BusinessValidationError
+from app.core.exceptions import AppException, NotFoundError, BusinessValidationError
 from app.core.logger import logger
 
 router = APIRouter(prefix="/trades", tags=["Trades"])
@@ -117,13 +117,23 @@ async def publish_trade_to_channel(
     db: AsyncSession = Depends(get_db)
 ):
     """Admin-only endpoint to publish a trade with chart snapshot & Jinja2 caption to Telegram channel."""
-    repo = TradeRepository(db)
-    trade = await repo.get_by_id(trade_id)
-    if not trade:
-        raise NotFoundError("معامله مورد نظر یافت نشد.")
+    try:
+        res = await db.execute(select(Trade).where(Trade.id == str(trade_id)))
+        trade = res.scalar_one_or_none()
+        if not trade:
+            logger.error(f"Publish aborted: Trade id='{trade_id}' not found in database (admin={admin_user.id}).")
+            raise NotFoundError("معامله مورد نظر در پایگاه داده یافت نشد.")
 
-    published_trade = await ChannelService.publish_trade(db, trade)
-    return TradeService.trade_to_response(published_trade)
+        published_trade = await ChannelService.publish_trade(db, trade)
+        return TradeService.trade_to_response(published_trade)
+    except NotFoundError:
+        raise
+    except AppException as exc:
+        logger.error(f"Publish failed for trade id='{trade_id}': {exc.message}")
+        raise
+    except Exception as exc:
+        logger.error(f"Unexpected error publishing trade id='{trade_id}': {exc}")
+        raise AppException(f"خطا در انتشار معامله: {exc}", status_code=500)
 
 
 @router.post("/{trade_id}/chart-upload")

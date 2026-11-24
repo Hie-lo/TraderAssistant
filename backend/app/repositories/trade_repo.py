@@ -36,6 +36,7 @@ class TradeRepository(BaseRepository[Trade]):
             if hasattr(trade, k):
                 setattr(trade, k, v)
         await self.session.commit()
+        await self.session.refresh(trade)
         return trade
 
     async def get_weekly_losses(self, user_id: int) -> Decimal:

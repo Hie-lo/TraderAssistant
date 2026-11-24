@@ -81,6 +81,30 @@ async def test_trades_crud_flow():
         assert updated["status"] == "TP"
         assert "Closed at target" in updated["notes"]
 
+        # 2.5 Create with stringified numeric fields & omitted base via /api/trades and verify bootstrap persistence
+        str_payload = {
+            "pair": "ETHUSDT",
+            "is_long": True,
+            "entry_price": "3400.50",
+            "stop_loss": "3300.00",
+            "take_profit": "3600.00",
+            "size": "0.1990",
+            "margin": "67.67",
+            "leverage": 10,
+            "risk_amount": "20.00",
+            "potential_profit": "39.70",
+            "rr": "1.99",
+            "status": "OPEN",
+            "strategy": "Breakout",
+        }
+        res_str = await ac.post("/api/trades", json=str_payload, headers=headers)
+        assert res_str.status_code == 201
+        str_trade = res_str.json()
+        assert str_trade["base"] == "ETH"
+        boot_res = await ac.get("/api/v1/bootstrap", headers=headers)
+        assert any(t["id"] == str_trade["id"] for t in boot_res.json()["trades"])
+        await ac.delete(f"/api/trades/{str_trade['id']}", headers=headers)
+
         # 3. Delete trade
         del_res = await ac.delete(f"/api/v1/trades/{trade_id}", headers=headers)
         assert del_res.status_code == 200

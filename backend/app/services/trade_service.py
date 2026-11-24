@@ -97,19 +97,21 @@ class TradeService:
         if trade_in.balance and Decimal(str(trade_in.balance)) > 0:
             await user_repo.update_balance(user_id, Decimal(str(trade_in.balance)))
 
-        norm_symbol = trade_in.pair.replace(" / ", "").replace("/", "").upper()
-        if "USDT" not in norm_symbol:
+        norm_symbol = trade_in.pair.replace(" / ", "").replace("/", "").replace(" ", "").upper()
+        if not norm_symbol.endswith("USDT"):
             norm_symbol += "USDT"
+        derived_base = (trade_in.base or norm_symbol[:-4]).strip().upper()
+        display_pair = trade_in.pair if "/" in trade_in.pair else f"{derived_base} / USDT"
 
         trade = Trade(
             user_id=user_id,
-            pair=trade_in.pair,
+            pair=display_pair,
             symbol=norm_symbol,
-            base_asset=trade_in.base,
+            base_asset=derived_base,
             is_long=trade_in.is_long,
-            entry_price=Decimal(str(trade_in.entry_price)),
-            stop_loss=Decimal(str(trade_in.stop_loss)) if trade_in.stop_loss and trade_in.stop_loss != "—" else None,
-            take_profit=Decimal(str(trade_in.take_profit)) if trade_in.take_profit and trade_in.take_profit != "—" else None,
+            entry_price=trade_in.entry_price,
+            stop_loss=trade_in.stop_loss,
+            take_profit=trade_in.take_profit,
             position_size=calc_result.position_size,
             position_value=calc_result.position_value,
             required_margin=calc_result.required_margin,

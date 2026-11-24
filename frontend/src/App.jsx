@@ -173,6 +173,9 @@ const App = () => {
   const [stopLossPrice, setStopLossPrice] = useState('');
   const [takeProfitPrice, setTakeProfitPrice] = useState('');
   const [saveSuccessToast, setSaveSuccessToast] = useState(false);
+  const [isSavingTrade, setIsSavingTrade] = useState(false);
+  const [saveErrorToast, setSaveErrorToast] = useState(null);
+  const [journalErrorToast, setJournalErrorToast] = useState(null);
   const [activeInfoKey, setActiveInfoKey] = useState(null);
 
   // --- Journal & Strategy State (strictly empty for new users) ---
@@ -765,23 +768,29 @@ const App = () => {
     };
   }, [balance, riskValue, riskType, entryPrice, stopLossPrice, takeProfitPrice, leverage, positionSide]);
 
-  // --- Save Trade to Journal (Automatically Attaches Chart Snapshot) ---
+  // --- Save Trade to Journal (PostgreSQL via FastAPI, zero fake local fallback) ---
   const handleSaveTrade = async () => {
-    if (calcResult.warning || !calcResult.positionSize) return;
+    if (calcResult.warning || !calcResult.positionSize || isSavingTrade) return;
 
     const isLong = positionSide === 'LONG';
     const payload = {
-      pair: selectedPair.symbol,
+      pair: selectedPair.label,
+      base: selectedPair.base,
       is_long: isLong,
-      entry_price: entryPrice,
-      stop_loss: stopLossPrice || null,
-      take_profit: takeProfitPrice || null,
-      size: calcResult.positionSize.toFixed(4),
-      margin: calcResult.requiredMargin.toFixed(2),
-      leverage: leverage || 1,
-      risk_amount: calcResult.riskAmount.toFixed(2),
-      potential_profit: calcResult.potentialProfit > 0 ? calcResult.potentialProfit.toFixed(2) : calcResult.riskAmount.toFixed(2),
-      rr: calcResult.rrRatio || '—',
+      entry_price: Number(entryPrice),
+      stop_loss: stopLossPrice ? Number(stopLossPrice) : null,
+      take_profit: takeProfitPrice ? Number(takeProfitPrice) : null,
+      balance: Number(balance),
+      risk_type: riskType,
+      risk_value: Number(riskValue),
+      size: Number(calcResult.positionSize.toFixed(4)),
+      margin: Number(calcResult.requiredMargin.toFixed(2)),
+      leverage: Number(leverage) || 1,
+      risk_amount: Number(calcResult.riskAmount.toFixed(2)),
+      potential_profit: calcResult.potentialProfit > 0
+        ? Number(calcResult.potentialProfit.toFixed(2))
+        : Number(calcResult.riskAmount.toFixed(2)),
+      rr: calcResult.rrRatio || '\u2014',
       status: 'OPEN',
       strategy: defaultStrategies[0] || 'Price Action',
       entry_reason: '',
@@ -789,89 +798,74 @@ const App = () => {
       chart_timeframe: '1H'
     };
 
+    setIsSavingTrade(true);
+    setSaveErrorToast(null);
     try {
       const savedTrade = await api.createTrade(payload);
       setTrades((prev) => [savedTrade, ...prev]);
-    } catch (e) {
-      console.warn('Failed to save to backend, using local trade:', e);
-      const localTrade = {
-        id: 't_' + Date.now(),
-        pair: selectedPair.label,
-        base: selectedPair.base,
-        isLong,
-        entryPrice,
-        stopLoss: stopLossPrice || '—',
-        takeProfit: takeProfitPrice || '—',
-        size: calcResult.positionSize.toFixed(4),
-        margin: calcResult.requiredMargin.toFixed(2),
-        leverage: leverage || 1,
-        riskAmount: calcResult.riskAmount.toFixed(2),
-        potentialProfit: calcResult.potentialProfit > 0 ? calcResult.potentialProfit.toFixed(2) : calcResult.riskAmount.toFixed(2),
-        rr: calcResult.rrRatio || '—',
-        status: 'OPEN',
-        strategy: defaultStrategies[0] || 'Price Action',
-        entryReason: '',
-        notes: '',
-        date: 'الان',
-        hasChartSnapshot: true,
-        chartTimeframe: '1H',
-        customChartUrl: null
-      };
-      setTrades((prev) => [localTrade, ...prev]);
+      setSaveSuccessToast(true);
+      setTimeout(() => {
+        setSaveSuccessToast(false);
+        setActiveTab('journal');
+      }, 900);
+    } catch (err) {
+      console.error('Failed to persist trade to backend:', err);
+      setSaveErrorToast(err.message || '\u062e\u0637\u0627 \u062f\u0631 \u062b\u0628\u062a \u0645\u0639\u0627\u0645\u0644\u0647 \u062f\u0631 \u067e\u0627\u06cc\u06af\u0627\u0647 \u062f\u0627\u062f\u0647.');
+    } finally {
+      setIsSavingTrade(false);
     }
-
-    setSaveSuccessToast(true);
-    setTimeout(() => {
-      setSaveSuccessToast(false);
-      setActiveTab('journal');
-    }, 900);
   };
 
   // --- Journal Helpers ---
   const updateTradeStatus = async (id, newStatus, e) => {
     e.stopPropagation();
+    setJournalErrorToast(null);
     try {
       const updated = await api.updateTrade(id, { status: newStatus });
       setTrades((prev) => prev.map((t) => (t.id === id ? { ...t, ...updated } : t)));
     } catch (err) {
-      setTrades((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t))
-      );
+      console.error('Failed to update trade status:', err);
+      setJournalErrorToast(err.message || '\u062e\u0637\u0627 \u062f\u0631 \u0628\u0647\u200c\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06cc \u0648\u0636\u0639\u06cc\u062a \u0645\u0639\u0627\u0645\u0644\u0647.');
+    } finally {
+      setOpenStatusMenuId(null);
     }
-    setOpenStatusMenuId(null);
   };
 
   const updateDraftField = (field, value) => {
     setDraftTrade((prev) => (prev ? { ...prev, [field]: value } : null));
     setDetailSaveToast(false);
+    setJournalErrorToast(null);
   };
 
   const handleSaveDraftChanges = async () => {
     if (!draftTrade) return;
+    setJournalErrorToast(null);
     try {
       const updated = await api.updateTrade(draftTrade.id, {
         status: draftTrade.status,
         strategy: draftTrade.strategy,
         entry_reason: draftTrade.entryReason,
-        notes: draftTrade.notes
+        notes: draftTrade.notes,
+        chart_timeframe: draftTrade.chartTimeframe
       });
       setTrades((prev) =>
         prev.map((t) => (t.id === draftTrade.id ? { ...draftTrade, ...updated } : t))
       );
+      setDraftTrade((prev) => (prev ? { ...prev, ...updated } : updated));
+      setDetailSaveToast(true);
+      setTimeout(() => setDetailSaveToast(false), 2000);
     } catch (err) {
-      setTrades((prev) =>
-        prev.map((t) => (t.id === draftTrade.id ? { ...draftTrade } : t))
-      );
+      console.error('Failed to save trade changes:', err);
+      setJournalErrorToast(err.message || '\u062e\u0637\u0627 \u062f\u0631 \u0630\u062e\u06cc\u0631\u0647 \u062a\u063a\u06cc\u06cc\u0631\u0627\u062a \u0645\u0639\u0627\u0645\u0644\u0647.');
     }
-    setDetailSaveToast(true);
-    setTimeout(() => setDetailSaveToast(false), 2000);
   };
 
   const handleDeleteTrade = async (tradeId, e) => {
     if (e) e.stopPropagation();
-    const confirmed = window.confirm('آیا از حذف این معامله از ژورنال اطمینان دارید؟');
+    const confirmed = window.confirm('\u0622\u06cc\u0627 \u0627\u0632 \u062d\u0630\u0641 \u0627\u06cc\u0646 \u0645\u0639\u0627\u0645\u0644\u0647 \u0627\u0632 \u0698\u0648\u0631\u0646\u0627\u0644 \u0627\u0637\u0645\u06cc\u0646\u0627\u0646 \u062f\u0627\u0631\u06cc\u062f\u061f');
     if (!confirmed) return;
 
+    setJournalErrorToast(null);
     try {
       await api.deleteTrade(tradeId);
       setTrades((prev) => prev.filter((t) => t.id !== tradeId));
@@ -880,12 +874,8 @@ const App = () => {
         setDraftTrade(null);
       }
     } catch (err) {
-      console.warn('Failed to delete trade on backend, removing locally:', err);
-      setTrades((prev) => prev.filter((t) => t.id !== tradeId));
-      if (selectedTradeId === tradeId) {
-        setSelectedTradeId(null);
-        setDraftTrade(null);
-      }
+      console.error('Failed to delete trade on backend:', err);
+      setJournalErrorToast(err.message || '\u062e\u0637\u0627 \u062f\u0631 \u062d\u0630\u0641 \u0645\u0639\u0627\u0645\u0644\u0647.');
     }
   };
 
@@ -1954,11 +1944,19 @@ const App = () => {
                 </div>
               </div>
 
+              {/* Save Error Alert */}
+              {saveErrorToast && (
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex items-center justify-between gap-2">
+                  <span className="text-rose-300 text-xs">{saveErrorToast}</span>
+                  <button type="button" onClick={() => setSaveErrorToast(null)} className="text-rose-400 text-xs px-1">✕</button>
+                </div>
+              )}
+
               {/* Save to Journal Button */}
               <button
                 type="button"
                 onClick={handleSaveTrade}
-                disabled={!!calcResult.warning || !calcResult.positionSize}
+                disabled={!!calcResult.warning || !calcResult.positionSize || isSavingTrade}
                 className={`w-full py-3.5 sm:py-4 rounded-xl font-bold text-xs sm:text-sm flex justify-center items-center gap-2 transition-all ${
                   calcResult.warning || !calcResult.positionSize
                     ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
@@ -1984,6 +1982,12 @@ const App = () => {
         {/* ==================== TAB 2: TRADE JOURNAL ==================== */}
         {activeTab === 'journal' && !draftTrade && (
           <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6" onClick={() => setOpenStatusMenuId(null)}>
+            {journalErrorToast && (
+              <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex items-center justify-between gap-2">
+                <span className="text-rose-300 text-xs">{journalErrorToast}</span>
+                <button type="button" onClick={() => setJournalErrorToast(null)} className="text-rose-400 text-xs px-1">✕</button>
+              </div>
+            )}
             {/* Mini Portfolio Analytics Header */}
             <div className="grid grid-cols-3 gap-2 sm:gap-3 bg-gray-950 p-3 sm:p-4 rounded-xl border border-gray-800">
               <div className="text-center">
@@ -2551,6 +2555,13 @@ const App = () => {
               </div>
             )}
 
+            {journalErrorToast && (
+              <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex items-center justify-between gap-2">
+                <span className="text-rose-300 text-xs">{journalErrorToast}</span>
+                <button type="button" onClick={() => setJournalErrorToast(null)} className="text-rose-400 text-xs px-1">✕</button>
+              </div>
+            )}
+
             {/* Action Buttons: Save & Delete Trade */}
             <div className="pt-2 flex items-center gap-2">
               {(hasUnsavedChanges || detailSaveToast) ? (
@@ -2862,14 +2873,14 @@ const App = () => {
               {userRole === 'ADMIN' ? (
                 <>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                  <span className="text-[9px] sm:text-[10px] font-bold mt-1">??????</span>
+                  <span className="text-[9px] sm:text-[10px] font-bold mt-1">مدیریت</span>
                 </>
               ) : (
                 <>
                   <div className="w-[18px] h-[18px] rounded-md border border-dashed border-current flex items-center justify-center">
                     <span className="w-1 h-1 rounded-full bg-current"></span>
                   </div>
-                  <span className="text-[9px] sm:text-[10px] font-medium mt-1">???????</span>
+                  <span className="text-[9px] sm:text-[10px] font-medium mt-1">به‌زودی</span>
                 </>
               )}
             </button>

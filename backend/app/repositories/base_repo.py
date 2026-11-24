@@ -24,6 +24,7 @@ class BaseRepository(Generic[ModelType]):
     async def create(self, entity: ModelType) -> ModelType:
         self.session.add(entity)
         await self.session.commit()
+        await self.session.refresh(entity)
         return entity
 
     async def delete(self, entity: ModelType) -> None:
