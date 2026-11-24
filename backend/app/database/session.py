@@ -1,5 +1,6 @@
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncConnection
 from app.core.config import settings
 from app.core.logger import logger
 
@@ -35,3 +36,13 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+async def ensure_schema_columns(conn: AsyncConnection) -> None:
+    """Idempotently adds new columns on existing databases where create_all does not alter tables."""
+    if engine.dialect.name == "postgresql":
+        await conn.execute(text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS telegram_message_id INTEGER"))
+    else:
+        cols = (await conn.execute(text("PRAGMA table_info(trades)"))).fetchall()
+        if cols and not any(c[1] == "telegram_message_id" for c in cols):
+            await conn.execute(text("ALTER TABLE trades ADD COLUMN telegram_message_id INTEGER"))

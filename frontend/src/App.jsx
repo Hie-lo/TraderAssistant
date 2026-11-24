@@ -139,6 +139,14 @@ const App = () => {
   // --- Dynamic Pairs & Strategies from Backend ---
   const [pairs, setPairs] = useState(FALLBACK_PAIRS);
   const [pairsLoading, setPairsLoading] = useState(false);
+  const [userRole, setUserRole] = useState('USER');
+  const [channelTemplate, setChannelTemplate] = useState('');
+  const [channelIdInput, setChannelIdInput] = useState('');
+  const [isLoadingTemplate, setIsLoadingTemplate] = useState(false);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [templateFeedback, setTemplateFeedback] = useState(null);
+  const [isPublishingTrade, setIsPublishingTrade] = useState(false);
+  const [publishFeedback, setPublishFeedback] = useState(null);
   const [marketPrices, setMarketPrices] = useState({});
   const marketPricesRef = useRef({});
   const exchangePairsLoadedRef = useRef(false);
@@ -219,6 +227,9 @@ const App = () => {
         if (data.user?.photo_url && !getTelegramUser()?.photo_url) {
           setUserPhoto(data.user.photo_url);
         }
+        if (data.user?.role) {
+          setUserRole(data.user.role);
+        }
         if (data.user?.default_balance) {
           setBalance(data.user.default_balance);
         }
@@ -282,6 +293,29 @@ const App = () => {
   const handleTickerMouseUpOrLeave = () => {
     isDraggingTickerRef.current = false;
   };
+
+  // --- Fetch Admin Channel Template When Admin Tab Opens ---
+  useEffect(() => {
+    if (activeTab !== 'admin' || userRole !== 'ADMIN') return;
+    let isCancelled = false;
+    setIsLoadingTemplate(true);
+    setTemplateFeedback(null);
+    api.getAdminTemplate()
+      .then((res) => {
+        if (isCancelled) return;
+        setChannelTemplate(res.template || '');
+        setChannelIdInput(res.channelId || '');
+      })
+      .catch((err) => {
+        if (!isCancelled) {
+          setTemplateFeedback({ type: 'error', msg: err.message || 'خطا در دریافت قالب کانال' });
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoadingTemplate(false);
+      });
+    return () => { isCancelled = true; };
+  }, [activeTab, userRole]);
 
   // --- Keep active pair symbol set synced for fast !miniTicker@arr filtering ---
   useEffect(() => {
@@ -488,6 +522,7 @@ const App = () => {
       const found = trades.find((t) => t.id === selectedTradeId);
       setDraftTrade(found ? { ...found } : null);
       setDetailSaveToast(false);
+      setPublishFeedback(null);
       setIsChartZoomOpen(false);
     } else {
       setDraftTrade(null);
@@ -851,6 +886,44 @@ const App = () => {
         setSelectedTradeId(null);
         setDraftTrade(null);
       }
+    }
+  };
+
+  const handleSaveAdminTemplate = async () => {
+    if (!channelTemplate.trim()) {
+      setTemplateFeedback({ type: 'error', msg: 'متن قالب نمی‌تواند خالی باشد.' });
+      return;
+    }
+    setIsSavingTemplate(true);
+    setTemplateFeedback(null);
+    try {
+      const res = await api.updateAdminTemplate(channelTemplate, channelIdInput);
+      setChannelTemplate(res.template || channelTemplate);
+      setChannelIdInput(res.channelId ?? channelIdInput);
+      setTemplateFeedback({ type: 'success', msg: 'قالب و شناسه کانال با موفقیت ذخیره شدند.' });
+    } catch (err) {
+      setTemplateFeedback({ type: 'error', msg: err.message || 'خطا در ذخیره قالب کانال' });
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  };
+
+  const handlePublishTrade = async () => {
+    if (!draftTrade || isPublishingTrade) return;
+    setIsPublishingTrade(true);
+    setPublishFeedback(null);
+    try {
+      const published = await api.publishTrade(draftTrade.id);
+      setDraftTrade((prev) => (prev ? { ...prev, ...published } : published));
+      setTrades((prev) => prev.map((t) => (t.id === published.id ? { ...t, ...published } : t)));
+      setPublishFeedback({
+        type: 'success',
+        msg: `در کانال منتشر شد (شناسه پیام: #${published.telegramMessageId || 'OK'})`
+      });
+    } catch (err) {
+      setPublishFeedback({ type: 'error', msg: err.message || 'خطا در انتشار معامله در کانال' });
+    } finally {
+      setIsPublishingTrade(false);
     }
   };
 
@@ -2434,6 +2507,50 @@ const App = () => {
               </div>
             </div>
 
+            {/* Admin-Only: Publish to Telegram Channel */}
+            {userRole === 'ADMIN' && (
+              <div className="bg-gray-950/90 border border-indigo-500/30 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                      📢 انتشار در کانال تلگرام
+                      {draftTrade.telegramMessageId && (
+                        <span className="text-[10px] font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+                          منتشر شده (#{draftTrade.telegramMessageId})
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[10px] text-gray-500 block mt-0.5">
+                      {draftTrade.isCustomChart || draftTrade.customChartUrl
+                        ? 'با تصویر چارت پیوست‌شده و قالب Jinja2 منتشر می‌شود.'
+                        : 'چارت کندل‌استیک به‌صورت خودکار (CCXT + mplfinance) تولید و منتشر می‌شود.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePublishTrade}
+                    disabled={isPublishingTrade}
+                    className={`shrink-0 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 ${
+                      isPublishingTrade
+                        ? 'bg-indigo-600/40 text-indigo-200 cursor-wait'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30'
+                    }`}
+                  >
+                    {isPublishingTrade ? 'در حال ارسال...' : (draftTrade.telegramMessageId ? 'انتشار مجدد در کانال' : 'Publish to Channel')}
+                  </button>
+                </div>
+                {publishFeedback && (
+                  <div className={`text-[11px] px-2.5 py-1.5 rounded-lg border ${
+                    publishFeedback.type === 'success'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}>
+                    {publishFeedback.msg}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Action Buttons: Save & Delete Trade */}
             <div className="pt-2 flex items-center gap-2">
               {(hasUnsavedChanges || detailSaveToast) ? (
@@ -2559,6 +2676,117 @@ const App = () => {
           </div>
         )}
 
+        {/* ==================== TAB 4A: ADMIN / MANAGE PANEL (RBAC: ADMIN ONLY) ==================== */}
+        {activeTab === 'admin' && userRole === 'ADMIN' && (
+          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
+              <div>
+                <h2 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                  🛡️ پنل مدیریت و انتشار کانال
+                </h2>
+                <span className="text-[10px] sm:text-xs text-gray-400">تنظیم قالب پیام Jinja2 و کانال مقصد تلگرام</span>
+              </div>
+              <span className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-xl text-[10px] sm:text-xs font-mono font-bold">
+                ROLE: ADMIN
+              </span>
+            </div>
+
+            {isLoadingTemplate ? (
+              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 text-center text-xs text-gray-400">
+                در حال بارگذاری تنظیمات قالب...
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Target Channel ID */}
+                <div className="bg-gray-950 border border-gray-800 rounded-2xl p-3.5 sm:p-4 space-y-2">
+                  <label className="text-xs font-bold text-gray-300 block">
+                    شناسه کانال مقصد (CHANNEL_ID)
+                  </label>
+                  <input
+                    dir="ltr"
+                    type="text"
+                    value={channelIdInput}
+                    onChange={(e) => { setChannelIdInput(e.target.value); setTemplateFeedback(null); }}
+                    placeholder="-1001234567890 یا @my_trading_channel"
+                    className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs sm:text-sm font-mono text-white outline-none"
+                  />
+                  <span className="text-[10px] text-gray-500 block">
+                    ربات باید ادمین کانال باشد. در صورت خالی بودن از مقدار پیش‌فرض سرور (.env) استفاده می‌شود.
+                  </span>
+                </div>
+
+                {/* Jinja2 Channel Post Template */}
+                <div className="bg-gray-950 border border-gray-800 rounded-2xl p-3.5 sm:p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-bold text-gray-300">قالب پست کانال (Jinja2 + HTML)</label>
+                    <span className="text-[10px] text-gray-500 font-mono">Max 1024 chars</span>
+                  </div>
+
+                  <textarea
+                    dir="ltr"
+                    rows="8"
+                    value={channelTemplate}
+                    onChange={(e) => { setChannelTemplate(e.target.value); setTemplateFeedback(null); }}
+                    placeholder="Entry: {{ entry_price }} | SL: {{ sl }} | TP: {{ tp }}"
+                    className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 rounded-xl p-3 text-xs font-mono text-gray-100 outline-none leading-relaxed"
+                  />
+
+                  {/* Clickable Jinja2 Variable Helper Chips */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] text-gray-400 block">متغیرهای آماده (برای درج کلیک کنید):</span>
+                    <div dir="ltr" className="flex flex-wrap gap-1.5">
+                      {[
+                        '{{ pair }}',
+                        '{{ direction }}',
+                        '{{ entry_price }}',
+                        '{{ sl }}',
+                        '{{ tp }}',
+                        '{{ leverage }}',
+                        '{{ rr }}',
+                        '{{ status }}',
+                        '{{ strategy }}',
+                        '{{ notes }}'
+                      ].map((token) => (
+                        <button
+                          key={token}
+                          type="button"
+                          onClick={() => setChannelTemplate((prev) => `${prev}${prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''}${token}`)}
+                          className="px-2 py-0.5 rounded-md bg-gray-900 hover:bg-indigo-600/25 border border-gray-800 hover:border-indigo-500/40 text-[10px] font-mono text-indigo-300 transition-colors"
+                        >
+                          {token}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {templateFeedback && (
+                  <div className={`text-xs px-3 py-2.5 rounded-xl border ${
+                    templateFeedback.type === 'success'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}>
+                    {templateFeedback.msg}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSaveAdminTemplate}
+                  disabled={isSavingTemplate}
+                  className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
+                    isSavingTemplate
+                      ? 'bg-indigo-600/40 text-indigo-200 cursor-wait'
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 active:scale-[0.98]'
+                  }`}
+                >
+                  {isSavingTemplate ? 'در حال ذخیره...' : 'ذخیره قالب انتشار کانال'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ==================== TAB 4: EMPTY PLACEHOLDER SLOT ==================== */}
         {activeTab === 'empty' && (
           <div className="p-6 flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center text-center space-y-3 pb-6">
@@ -2626,15 +2854,24 @@ const App = () => {
             {/* 4. Left of Home: Empty Button (فعلاً خالی) */}
             <button
               type="button"
-              onClick={() => { setActiveTab('empty'); setSelectedTradeId(null); }}
+              onClick={() => { setActiveTab(userRole === 'ADMIN' ? 'admin' : 'empty'); setSelectedTradeId(null); }}
               className={`flex flex-col items-center justify-center py-1 rounded-xl transition-all ${
-                activeTab === 'empty' ? 'text-blue-400' : 'text-gray-600 hover:text-gray-400'
+                (activeTab === 'admin' || activeTab === 'empty') ? 'text-indigo-400' : (userRole === 'ADMIN' ? 'text-gray-400 hover:text-indigo-300' : 'text-gray-600 hover:text-gray-400')
               }`}
             >
-              <div className="w-[18px] h-[18px] rounded-md border border-dashed border-current flex items-center justify-center">
-                <span className="w-1 h-1 rounded-full bg-current"></span>
-              </div>
-              <span className="text-[9px] sm:text-[10px] font-medium mt-1">به‌زودی</span>
+              {userRole === 'ADMIN' ? (
+                <>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  <span className="text-[9px] sm:text-[10px] font-bold mt-1">??????</span>
+                </>
+              ) : (
+                <>
+                  <div className="w-[18px] h-[18px] rounded-md border border-dashed border-current flex items-center justify-center">
+                    <span className="w-1 h-1 rounded-full bg-current"></span>
+                  </div>
+                  <span className="text-[9px] sm:text-[10px] font-medium mt-1">???????</span>
+                </>
+              )}
             </button>
 
             {/* 5. Far Left: Portfolio (پورتفولیو) */}

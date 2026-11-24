@@ -4,11 +4,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, require_admin
 from app.core.security import AuthenticatedUser
+from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
+from app.database.seed import DEFAULT_SETTINGS
 from app.repositories.user_repo import UserRepository
 from app.repositories.system_repo import SystemRepository
 from app.services.admin_service import AdminService
-from app.schemas.admin_schema import UpdateUserStatusSchema, UpdateConfigSchema, AdminUserItemSchema
+from app.services.channel_service import ChannelService
+from app.schemas.admin_schema import (
+    UpdateUserStatusSchema,
+    UpdateConfigSchema,
+    AdminUserItemSchema,
+    ChannelTemplateSchema,
+)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -112,3 +120,48 @@ async def list_audit_logs(
         }
         for l in logs
     ]
+
+
+@router.get("/template", response_model=ChannelTemplateSchema)
+async def get_channel_template(
+    admin_user: AuthenticatedUser = Depends(require_admin)
+):
+    """Returns the current Jinja2 channel post template and configured target channel ID."""
+    template_str = DynamicConfig.get(
+        "channel_post_template",
+        DEFAULT_SETTINGS["channel_post_template"]
+    )
+    channel_id = DynamicConfig.get("channel_id") or str(settings.CHANNEL_ID or "")
+    return ChannelTemplateSchema(template=template_str, channel_id=channel_id)
+
+
+@router.put("/template")
+async def update_channel_template(
+    payload: ChannelTemplateSchema,
+    admin_user: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Validates and updates the Jinja2 channel post template (and optional channel_id)."""
+    ChannelService.validate_template(payload.template)
+
+    await AdminService.update_dynamic_config(
+        session=db,
+        admin_id=admin_user.id,
+        key="channel_post_template",
+        value=payload.template,
+        description="Jinja2 template for Telegram channel trade posts"
+    )
+    if payload.channel_id is not None:
+        await AdminService.update_dynamic_config(
+            session=db,
+            admin_id=admin_user.id,
+            key="channel_id",
+            value=payload.channel_id.strip(),
+            description="Target Telegram channel ID/username for trade publishing"
+        )
+
+    return {
+        "success": True,
+        "template": payload.template,
+        "channelId": DynamicConfig.get("channel_id") or str(settings.CHANNEL_ID or "")
+    }

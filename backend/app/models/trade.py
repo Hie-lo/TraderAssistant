@@ -37,6 +37,7 @@ class Trade(Base):
     chart_timeframe: Mapped[str] = mapped_column(String(8), default="1H", nullable=False)  # '15m', '1H', '4H'
     chart_image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     is_custom_chart: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    telegram_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 

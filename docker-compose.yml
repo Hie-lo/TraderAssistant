@@ -33,6 +33,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@db:5432/trading_db
       BOT_TOKEN: ${BOT_TOKEN:-7000000000:AAExampleTelegramBotTokenPlaceholder}
       ADMIN_LOG_CHANNEL_ID: ${ADMIN_LOG_CHANNEL_ID:--1001234567890}
+      CHANNEL_ID: ${CHANNEL_ID:-}
       SUPER_ADMIN_IDS: ${SUPER_ADMIN_IDS:-[111111111]}
       MINI_APP_URL: ${MINI_APP_URL:-https://your-domain.com}
       STORAGE_DIR: storage

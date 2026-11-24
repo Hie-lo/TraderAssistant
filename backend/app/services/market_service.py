@@ -44,17 +44,18 @@ class MarketService:
     ) -> pd.DataFrame:
         """Fetches OHLCV candles from Binance and returns a formatted pandas DataFrame."""
         exchange = cls.get_exchange()
-        # Clean symbol format e.g. BTCUSDT -> BTC/USDT:USDT or BTC/USDT
+        # Clean symbol format e.g. BTCUSDT -> BTC/USDT and lowercase timeframe (1H -> 1h)
         norm_symbol = symbol.replace(" / ", "").replace("/", "").upper()
         pair_key = f"{norm_symbol[:-4]}/{norm_symbol[-4:]}"
+        tf_ccxt = (timeframe or "1h").lower()
 
         try:
-            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=timeframe, limit=limit)
+            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=tf_ccxt, limit=limit)
         except Exception as e:
             logger.warning(f"CCXT fetch_ohlcv failed for {symbol}: {e}. Generating fallback candles.")
             # Generate deterministic fallback candle data if exchange is offline or blocked
             now_ms = int(datetime.now().timestamp() * 1000)
-            step_ms = 3600 * 1000 if timeframe == "1h" else 900 * 1000
+            step_ms = 3600 * 1000 if tf_ccxt == "1h" else (14400 * 1000 if tf_ccxt == "4h" else 900 * 1000)
             raw_candles = []
             base_p = 64000.0 if "BTC" in symbol else 3400.0 if "ETH" in symbol else 150.0
             for i in range(limit):

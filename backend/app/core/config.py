@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ENV_MODE: str = "development"
     BOT_TOKEN: str = "7000000000:AAExampleTelegramBotTokenPlaceholder"
     ADMIN_LOG_CHANNEL_ID: Union[int, str] = -1001234567890
+    CHANNEL_ID: Union[int, str] = ""
     SUPER_ADMIN_IDS: List[int] = [111111111]
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/trading_db"
     MINI_APP_URL: str = "https://localhost:5173"

@@ -12,13 +12,15 @@ from app.core.config import settings
 from app.core.logger import logger, TelegramLogNotifier
 from app.core.dynamic_config import DynamicConfig
 from app.core.access_control import AccessControl
-from app.database.session import engine, AsyncSessionLocal
+from app.database.session import engine, AsyncSessionLocal, ensure_schema_columns
 from app.database.seed import seed_initial_settings
 from app.models.base import Base
 from app.services.market_service import MarketService
 from app.services.alert_service import AlertService
 from app.api.middlewares import GlobalErrorCatcherMiddleware
 from app.api.v1.router import api_v1_router
+from app.api.v1.trades import router as trades_router
+from app.api.v1.admin import router as admin_router
 from app.bot.loader import bot, dp
 from app.bot.middlewares import BotAccessControlMiddleware
 from app.bot.handlers import user_start, user_alerts, user_screener, admin_panel
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await ensure_schema_columns(conn)
         logger.info("Database schema verified.")
     except Exception as e:
         logger.error(f"Error creating database tables: {e}")
@@ -165,8 +168,10 @@ app.add_middleware(
 # Mount static files directory for candlestick charts & uploaded images
 app.mount("/static", StaticFiles(directory=settings.STORAGE_DIR), name="static")
 
-# Mount API v1 router
+# Mount API v1 router + /api route aliases for direct /api/admin/* and /api/trades/* access
 app.include_router(api_v1_router)
+app.include_router(trades_router, prefix="/api", include_in_schema=False)
+app.include_router(admin_router, prefix="/api", include_in_schema=False)
 
 
 @app.get("/health", tags=["Health"])

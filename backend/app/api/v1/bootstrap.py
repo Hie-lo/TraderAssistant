@@ -73,7 +73,7 @@ async def get_initial_bootstrap(
             default_balance=f"{db_user.default_balance:.2f}",
             discipline_badge="سطح انضباط: حرفه‌ای 🛡️",
             status=db_user.status,
-            role=db_user.role,
+            role="ADMIN" if current_user.role == "ADMIN" else db_user.role,
             photo_url=current_user.photo_url
         ),
         config=DynamicAppConfigSchema(

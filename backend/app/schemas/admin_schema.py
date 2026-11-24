@@ -30,3 +30,9 @@ class AdminUserItemSchema(CamelModel):
     trades_count: int
     created_at: str
     last_active_at: str
+
+
+class ChannelTemplateSchema(CamelModel):
+    """Schema for reading/updating the Jinja2 channel post template and target channel."""
+    template: str
+    channel_id: Optional[str] = None

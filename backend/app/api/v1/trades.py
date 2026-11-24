@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.api.deps import get_db, get_current_user, check_heavy_limit
+from app.api.deps import get_db, get_current_user, check_heavy_limit, require_admin
 from app.core.security import AuthenticatedUser
 from app.database.session import AsyncSessionLocal
 from app.models.trade import Trade
@@ -14,6 +14,7 @@ from app.schemas.trade_schema import TradeCreateSchema, TradeUpdateSchema, Trade
 from app.schemas.common import ApiResponse
 from app.services.trade_service import TradeService
 from app.services.chart_service import ChartService
+from app.services.channel_service import ChannelService
 from app.services.market_service import MarketService
 from app.services.risk_guard_service import RiskGuardService
 from app.core.exceptions import NotFoundError, BusinessValidationError
@@ -83,13 +84,14 @@ async def create_new_trade(
 
 
 @router.patch("/{trade_id}", response_model=TradeResponseSchema)
+@router.put("/{trade_id}", response_model=TradeResponseSchema)
 async def update_trade_dirty_state(
     trade_id: str,
     patch_in: TradeUpdateSchema,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Persists dirty state modifications (status TP/SL/DRAW, notes, strategy, timeframe)."""
+    """Persists dirty state modifications and auto-edits live Telegram channel post if published."""
     trade, needs_sl_check = await TradeService.update_trade_dirty_state(
         session=db,
         user_id=current_user.id,
@@ -97,11 +99,31 @@ async def update_trade_dirty_state(
         patch_data=patch_in
     )
 
+    # Auto-edit live Telegram channel caption if this trade was already published
+    if trade.telegram_message_id:
+        await ChannelService.sync_published_trade_caption(trade)
+
     # If status transitioned to SL, verify weekly drawdown
     if needs_sl_check:
         asyncio.create_task(RiskGuardService.check_weekly_drawdown(db, current_user.id))
 
     return TradeService.trade_to_response(trade)
+
+
+@router.post("/{trade_id}/publish", response_model=TradeResponseSchema)
+async def publish_trade_to_channel(
+    trade_id: str,
+    admin_user: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Admin-only endpoint to publish a trade with chart snapshot & Jinja2 caption to Telegram channel."""
+    repo = TradeRepository(db)
+    trade = await repo.get_by_id(trade_id)
+    if not trade:
+        raise NotFoundError("معامله مورد نظر یافت نشد.")
+
+    published_trade = await ChannelService.publish_trade(db, trade)
+    return TradeService.trade_to_response(published_trade)
 
 
 @router.post("/{trade_id}/chart-upload")

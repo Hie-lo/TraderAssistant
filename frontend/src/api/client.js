@@ -50,8 +50,21 @@ export const api = {
 
   updateTrade: (tradeId, patchData) =>
     request(`/api/v1/trades/${tradeId}`, {
-      method: "PATCH",
+      method: "PUT",
       body: JSON.stringify(patchData),
+    }),
+
+  publishTrade: (tradeId) =>
+    request(`/api/v1/trades/${tradeId}/publish`, {
+      method: "POST",
+    }),
+
+  getAdminTemplate: () => request("/api/v1/admin/template"),
+
+  updateAdminTemplate: (template, channelId) =>
+    request("/api/v1/admin/template", {
+      method: "PUT",
+      body: JSON.stringify({ template, channelId }),
     }),
 
   deleteTrade: (tradeId) =>

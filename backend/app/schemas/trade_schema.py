@@ -59,3 +59,4 @@ class TradeResponseSchema(CamelModel):
     chart_timeframe: str = Field(default="1H", alias="chartTimeframe")
     custom_chart_url: Optional[str] = Field(default=None, alias="customChartUrl")
     realized_pnl: Optional[str] = Field(default="0.00", alias="realizedPnl")
+    telegram_message_id: Optional[int] = Field(default=None, alias="telegramMessageId")

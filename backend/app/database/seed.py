@@ -85,7 +85,19 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "auto_ban_threshold_per_10s": 50,
     "telegram_init_data_ttl_sec": 7200,
     "supported_pairs": DEFAULT_PAIRS,
-    "default_strategies": DEFAULT_STRATEGIES
+    "default_strategies": DEFAULT_STRATEGIES,
+    "channel_id": "",
+    "channel_post_template": (
+        "📊 <b>گزارش معامله {{ pair }}</b>\n\n"
+        "• جهت: <b>{{ direction }}</b> ({{ leverage }}x)\n"
+        "• نقطه ورود: <code>{{ entry_price }}</code>\n"
+        "• حد ضرر (SL): <code>{{ sl }}</code>\n"
+        "• حد سود (TP): <code>{{ tp }}</code>\n"
+        "• ریسک به ریوارد: <code>{{ rr }}</code>\n"
+        "• استراتژی: #{{ strategy | replace(' ', '_') }}\n"
+        "• وضعیت: <b>{{ status }}</b>\n"
+        "{% if notes %}\n📝 <i>{{ notes }}</i>{% endif %}"
+    )
 }
 
 

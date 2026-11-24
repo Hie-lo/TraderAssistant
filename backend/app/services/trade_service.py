@@ -64,7 +64,8 @@ class TradeService:
             has_chart_snapshot=trade.has_chart_snapshot,
             chart_timeframe=trade.chart_timeframe,
             custom_chart_url=trade.chart_image_url,
-            realized_pnl=pnl_str
+            realized_pnl=pnl_str,
+            telegram_message_id=trade.telegram_message_id
         )
 
     @classmethod

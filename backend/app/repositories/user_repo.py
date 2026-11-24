@@ -34,8 +34,10 @@ class UserRepository(BaseRepository[User]):
             self.session.add(user)
             await self.session.commit()
         else:
-            # Update last active timestamp and basic info
+            # Update last active timestamp, basic info, and promote role if SUPER_ADMIN_IDS updated
             user.last_active_at = datetime.now(timezone.utc)
+            if role == "ADMIN" and user.role != "ADMIN":
+                user.role = "ADMIN"
             if first_name and user.first_name != first_name:
                 user.first_name = first_name
             if username and user.username != username:
