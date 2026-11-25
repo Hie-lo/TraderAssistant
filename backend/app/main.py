@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from aiogram.exceptions import TelegramConflictError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import text
 
@@ -73,6 +74,13 @@ async def _run_bot():
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Cleared previous webhooks. Starting Aiogram polling loop...")
         await dp.start_polling(bot, handle_signals=False)
+    except TelegramConflictError as e:
+        logger.critical(
+            f"❌ Telegram bot polling conflict (another instance is polling with the same token): {e}"
+        )
+    except asyncio.CancelledError:
+        logger.info("Telegram bot polling task cancelled.")
+        raise
     except Exception as e:
         logger.critical(f"❌ Telegram bot polling failed to start or stopped: {e}")
 
@@ -83,14 +91,24 @@ async def lifespan(app: FastAPI):
     global bot_polling_task
     logger.info("Initializing Trading Assistant backend...")
 
-    # 1. Create DB tables if not present (supports both SQLite and Postgres)
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            await ensure_schema_columns(conn)
-        logger.info("Database schema verified.")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}")
+    # 1. Create DB tables with retry loop in case PostgreSQL DNS/startup lags behind backend
+    max_db_attempts = 5
+    retry_delay_sec = 3
+    for attempt in range(1, max_db_attempts + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+                await ensure_schema_columns(conn)
+            logger.info("Database schema verified.")
+            break
+        except Exception as e:
+            if attempt == max_db_attempts:
+                logger.error(f"Database initialization failed after {max_db_attempts} attempts: {e}")
+                raise
+            logger.warning(
+                f"Database not ready (attempt {attempt}/{max_db_attempts}): {e}. Retrying in {retry_delay_sec}s..."
+            )
+            await asyncio.sleep(retry_delay_sec)
 
     # 2. Seed default dynamic configuration
     try:

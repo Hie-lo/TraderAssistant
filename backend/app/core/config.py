@@ -23,6 +23,23 @@ class Settings(BaseSettings):
     STORAGE_DIR: str = "storage"
     LOGS_DIR: str = "logs"
 
+    @field_validator(
+        "ENV_MODE",
+        "BOT_TOKEN",
+        "ADMIN_LOG_CHANNEL_ID",
+        "CHANNEL_ID",
+        "DATABASE_URL",
+        "MINI_APP_URL",
+        "STORAGE_DIR",
+        "LOGS_DIR",
+        mode="before",
+    )
+    @classmethod
+    def strip_env_strings(cls, v):
+        if isinstance(v, str):
+            return v.strip().replace("\r", "").replace("\n", "")
+        return v
+
     @field_validator("SUPER_ADMIN_IDS", mode="before")
     @classmethod
     def parse_super_admin_ids(cls, v: Union[str, List[int], int]) -> List[int]:

@@ -85,7 +85,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "api_rate_limit_per_min": 60,
     "heavy_rate_limit_per_min": 6,
     "auto_ban_threshold_per_10s": 50,
-    "telegram_init_data_ttl_sec": 7200,
+    "telegram_init_data_ttl_sec": 3600,
     "supported_pairs": DEFAULT_PAIRS,
     "default_strategies": DEFAULT_STRATEGIES,
     "admin_card_number": "6037-9911-0000-0000",

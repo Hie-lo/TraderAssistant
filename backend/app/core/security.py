@@ -64,7 +64,8 @@ def verify_telegram_init_data(init_data_raw: Optional[str]) -> AuthenticatedUser
         raise AuthenticationError("فیلد auth_date نامعتبر است.")
 
     auth_date = int(auth_date_raw)
-    ttl = DynamicConfig.get("telegram_init_data_ttl_sec", 7200)
+    # Enforce strict 1-hour maximum initData replay window regardless of higher config overrides
+    ttl = min(int(DynamicConfig.get("telegram_init_data_ttl_sec", 3600)), 3600)
     current_time = int(time.time())
     if current_time - auth_date > ttl:
         raise AuthenticationError("اعتبار داده‌های تلگرام منقضی شده است (Replay Check).")

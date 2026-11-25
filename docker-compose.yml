@@ -3,16 +3,16 @@ services:
     image: postgres:16-alpine
     container_name: trading_db
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: trading_db
+    env_file:
+      - .env
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - trading_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-trading_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -28,21 +28,13 @@ services:
         condition: service_healthy
     env_file:
       - .env
-    environment:
-      ENV_MODE: production
-      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@db:5432/trading_db
-      BOT_TOKEN: ${BOT_TOKEN:-7000000000:AAExampleTelegramBotTokenPlaceholder}
-      ADMIN_LOG_CHANNEL_ID: ${ADMIN_LOG_CHANNEL_ID:--1001234567890}
-      CHANNEL_ID: ${CHANNEL_ID:-}
-      SUPER_ADMIN_IDS: ${SUPER_ADMIN_IDS:-[111111111]}
-      MINI_APP_URL: ${MINI_APP_URL:-https://your-domain.com}
-      STORAGE_DIR: storage
-      LOGS_DIR: logs
     ports:
       - "8000:8000"
     volumes:
       - ./backend/storage:/app/storage
       - ./backend/logs:/app/logs
+    networks:
+      - trading_net
 
   frontend:
     build:
@@ -52,6 +44,12 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
+    networks:
+      - trading_net
 
 volumes:
   postgres_data:
+
+networks:
+  trading_net:
+    driver: bridge

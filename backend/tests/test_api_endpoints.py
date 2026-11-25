@@ -600,3 +600,99 @@ async def test_vip_subscription_admin_panel_and_chart_features(monkeypatch):
             await session.execute(delete(Trade).where(Trade.user_id == test_uid))
             await session.execute(delete(User).where(User.id == test_uid))
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_idor_protection_on_alerts_and_trades(monkeypatch):
+    """Verify users cannot mutate/delete another user's alerts or trades."""
+    from app.api.deps import get_current_user
+    from app.core.security import AuthenticatedUser
+    from app.models.alert import PriceAlert
+    from app.models.trade import Trade
+    from app.models.user import User
+    from app.repositories.alert_repo import AlertRepository
+    from app.repositories.user_repo import UserRepository
+    from app.services.market_service import MarketService
+    from sqlalchemy import delete
+
+    owner_id = 555001
+    attacker_id = 555002
+
+    async def fake_ohlcv(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(MarketService, "fetch_ohlcv_dataframe", fake_ohlcv)
+
+    async with AsyncSessionLocal() as session:
+        u_repo = UserRepository(session)
+        await u_repo.get_or_create(telegram_id=owner_id, first_name="Owner", role="USER")
+        await u_repo.get_or_create(telegram_id=attacker_id, first_name="Attacker", role="VIP")
+        a_repo = AlertRepository(session)
+        alert = await a_repo.create(
+            PriceAlert(
+                user_id=owner_id,
+                symbol="BTC/USDT",
+                alert_type="PRICE",
+                base_price=62000.0,
+                target_value=65000.0,
+                trigger_price=65000.0,
+                direction="UP",
+            )
+        )
+        alert_id = alert.id
+
+    headers = {"X-Telegram-Init-Data": "DEV_MOCK_USER"}
+    try:
+        # 1. Alert IDOR guard: attacker cannot delete owner's alert
+        async with AsyncSessionLocal() as session:
+            a_repo = AlertRepository(session)
+            assert await a_repo.delete_by_id_and_user(alert_id, attacker_id) is False
+            assert await a_repo.get_by_id(alert_id) is not None
+            assert await a_repo.delete_by_id_and_user(alert_id, owner_id) is True
+
+        # 2. Trade IDOR guard across PATCH / DELETE / regenerate-chart
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+            id=owner_id, first_name="Owner", role="USER"
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            create_res = await ac.post(
+                "/api/trades",
+                json={
+                    "pair": "BTC / USDT",
+                    "base": "BTC",
+                    "isLong": True,
+                    "entryPrice": 62100,
+                    "stopLoss": 61900,
+                    "takeProfit": 62500,
+                    "leverage": 10,
+                    "balance": 1000,
+                    "riskType": "%",
+                    "riskValue": 2,
+                },
+                headers=headers,
+            )
+            assert create_res.status_code == 201
+            trade_id = create_res.json()["id"]
+
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+                id=attacker_id, first_name="Attacker", role="VIP"
+            )
+            patch_res = await ac.patch(f"/api/trades/{trade_id}", json={"status": "TP"}, headers=headers)
+            assert patch_res.status_code == 404
+
+            del_res = await ac.delete(f"/api/trades/{trade_id}", headers=headers)
+            assert del_res.status_code == 404
+
+            regen_res = await ac.post(
+                f"/api/trades/{trade_id}/regenerate-chart",
+                json={"timeframe": "1H"},
+                headers=headers,
+            )
+            assert regen_res.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(PriceAlert).where(PriceAlert.user_id.in_([owner_id, attacker_id])))
+            await session.execute(delete(Trade).where(Trade.user_id.in_([owner_id, attacker_id])))
+            await session.execute(delete(User).where(User.id.in_([owner_id, attacker_id])))
+            await session.commit()

@@ -76,7 +76,8 @@ async def create_new_trade(
     """Creates a new trade journal entry after checking Freemium/VIP limits."""
     # Check Freemium / VIP trade limit (DB user.role + expiration check)
     user_repo = UserRepository(db)
-    db_user = await user_repo.get_by_id(current_user.id)
+    # Lock user row during quota check + insert to prevent concurrent free-tier limit bypass
+    db_user = await user_repo.get_by_id_for_update(current_user.id)
     effective_role = "ADMIN" if current_user.role == "ADMIN" else await user_repo.resolve_effective_role(db_user)
     if effective_role == "USER":
         free_max_trades = int(DynamicConfig.get("free_max_trades", 15))

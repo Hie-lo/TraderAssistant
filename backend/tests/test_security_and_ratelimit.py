@@ -1,8 +1,15 @@
+import hmac
+import hashlib
+import json
+import time
+from urllib.parse import urlencode
 import pytest
+from app.core.config import Settings, settings
+from app.core.dynamic_config import DynamicConfig
 from app.core.security import verify_telegram_init_data, AuthenticatedUser
 from app.core.access_control import AccessControl
 from app.core.rate_limiter import RateLimiter
-from app.core.exceptions import RateLimitExceeded, UserBannedError
+from app.core.exceptions import AuthenticationError, RateLimitExceeded, UserBannedError
 
 
 def test_dev_mode_mock_user():
@@ -46,3 +53,41 @@ def test_rate_limiter_burst_auto_ban():
 
     # Clean up
     AccessControl.set_user_restriction(user_id, "ACTIVE")
+
+
+def test_settings_strips_whitespace_and_crlf():
+    """Config parsing must strip trailing spaces and CR/LF from DATABASE_URL and env strings."""
+    cfg = Settings(
+        DATABASE_URL=" postgresql+asyncpg://u:p@db:5432/trading_db\r\n ",
+        BOT_TOKEN=" 7000000000:AAFakeToken\r ",
+        MINI_APP_URL="https://nini.biscuitandpeanut.online\r\n",
+    )
+    assert cfg.DATABASE_URL == "postgresql+asyncpg://u:p@db:5432/trading_db"
+    assert cfg.BOT_TOKEN == "7000000000:AAFakeToken"
+    assert cfg.MINI_APP_URL == "https://nini.biscuitandpeanut.online"
+
+
+def _build_signed_init_data(bot_token: str, auth_date: int, user_id: int = 777777) -> str:
+    fields = {
+        "auth_date": str(auth_date),
+        "user": json.dumps({"id": user_id, "first_name": "Tester", "username": "tester"}, separators=(",", ":")),
+    }
+    data_check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret_key, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    return urlencode(fields)
+
+
+def test_init_data_enforces_strict_one_hour_ttl(monkeypatch):
+    """Telegram initData older than 3600s must fail even if dynamic TTL was set higher."""
+    monkeypatch.setattr(settings, "ENV_MODE", "production")
+    monkeypatch.setattr(DynamicConfig, "_cache", {**DynamicConfig._cache, "telegram_init_data_ttl_sec": 7200})
+
+    now = int(time.time())
+    fresh_init_data = _build_signed_init_data(settings.BOT_TOKEN, now - 60)
+    verified = verify_telegram_init_data(fresh_init_data)
+    assert verified.id == 777777
+
+    expired_init_data = _build_signed_init_data(settings.BOT_TOKEN, now - 3605)
+    with pytest.raises(AuthenticationError):
+        verify_telegram_init_data(expired_init_data)

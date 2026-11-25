@@ -34,3 +34,13 @@ class AlertRepository(BaseRepository[PriceAlert]):
         stmt = select(PriceAlert).where(PriceAlert.user_id == user_id).order_by(PriceAlert.created_at.desc()).limit(limit)
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
+
+    async def delete_by_id_and_user(self, alert_id: int, user_id: int) -> bool:
+        stmt = select(PriceAlert).where(PriceAlert.id == alert_id, PriceAlert.user_id == user_id)
+        res = await self.session.execute(stmt)
+        alert = res.scalar_one_or_none()
+        if not alert:
+            return False
+        await self.session.delete(alert)
+        await self.session.commit()
+        return True

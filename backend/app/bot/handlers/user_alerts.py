@@ -248,16 +248,18 @@ async def handle_list_my_alerts(query: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_alert_"))
 async def handle_delete_alert(query: CallbackQuery):
+    if not query.from_user:
+        return
     alert_id_str = query.data.replace("del_alert_", "")
     try:
         alert_id = int(alert_id_str)
         async with AsyncSessionLocal() as session:
             repo = AlertRepository(session)
-            deleted = await repo.delete_by_id(alert_id)
+            deleted = await repo.delete_by_id_and_user(alert_id, query.from_user.id)
         if deleted:
             await query.message.answer(f"✅ هشدار شماره {alert_id} با موفقیت حذف شد.")
         else:
-            await query.message.answer("⚠️ هشدار یافت نشد یا قبلاً حذف شده است.")
+            await query.message.answer("⚠️ هشدار یافت نشد یا متعلق به شما نیست.")
     except Exception as e:
         await query.message.answer(f"خطا در حذف هشدار: {e}")
     await query.answer()
