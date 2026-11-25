@@ -9,6 +9,7 @@ from app.repositories.strategy_repo import StrategyRepository
 from app.repositories.trade_repo import TradeRepository
 from app.services.trade_service import TradeService
 from app.services.pair_service import PairService
+from app.services.subscription_service import SubscriptionService
 from app.schemas.dashboard_schema import (
     BootstrapResponseSchema,
     UserProfileSchema,
@@ -67,6 +68,7 @@ async def get_initial_bootstrap(
 
     default_strats = DynamicConfig.get("default_strategies", [])
 
+    effective_role = await user_repo.resolve_effective_role(db_user)
     return BootstrapResponseSchema(
         user=UserProfileSchema(
             id=db_user.id,
@@ -74,7 +76,10 @@ async def get_initial_bootstrap(
             default_balance=f"{db_user.default_balance:.2f}",
             discipline_badge="سطح انضباط: حرفه‌ای 🛡️",
             status=db_user.status,
-            role="ADMIN" if current_user.role == "ADMIN" else db_user.role,
+            role="ADMIN" if current_user.role == "ADMIN" else effective_role,
+            subscription_end_date=(
+                db_user.subscription_end_date.isoformat() if db_user.subscription_end_date else None
+            ),
             photo_url=current_user.photo_url
         ),
         config=DynamicAppConfigSchema(
@@ -83,7 +88,8 @@ async def get_initial_bootstrap(
             default_strategies=default_strats
         ),
         custom_strategies=custom_strategies_list,
-        trades=formatted_trades
+        trades=formatted_trades,
+        vip_config=SubscriptionService.get_vip_public_config()
     )
 
 

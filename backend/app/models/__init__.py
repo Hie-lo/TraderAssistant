@@ -3,6 +3,7 @@ from app.models.user import User
 from app.models.strategy import UserStrategy
 from app.models.trade import Trade
 from app.models.alert import PriceAlert
+from app.models.payment import Payment
 from app.models.system import SystemSetting, AdminAuditLog
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "UserStrategy",
     "Trade",
     "PriceAlert",
+    "Payment",
     "SystemSetting",
     "AdminAuditLog",
 ]

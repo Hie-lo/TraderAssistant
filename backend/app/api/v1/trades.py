@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -38,7 +38,12 @@ async def generate_and_attach_chart_task(
     Zero-Defect Rule: Opens an independent AsyncSessionLocal session for the background task.
     """
     try:
-        df = await MarketService.fetch_ohlcv_dataframe(symbol=symbol, timeframe=timeframe, limit=80)
+        df = await MarketService.fetch_ohlcv_dataframe(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=80,
+            center_price=entry
+        )
         chart_url = await ChartService.generate_trade_chart(
             trade_id=trade_id,
             symbol=symbol,
@@ -69,9 +74,10 @@ async def create_new_trade(
     db: AsyncSession = Depends(get_db)
 ):
     """Creates a new trade journal entry after checking Freemium/VIP limits."""
-    # Check Freemium / VIP trade limit (DB user.role is single source of truth)
-    db_user = await UserRepository(db).get_by_id(current_user.id)
-    effective_role = db_user.role if db_user else current_user.role
+    # Check Freemium / VIP trade limit (DB user.role + expiration check)
+    user_repo = UserRepository(db)
+    db_user = await user_repo.get_by_id(current_user.id)
+    effective_role = "ADMIN" if current_user.role == "ADMIN" else await user_repo.resolve_effective_role(db_user)
     if effective_role == "USER":
         free_max_trades = int(DynamicConfig.get("free_max_trades", 15))
         total_trades = await TradeRepository(db).count_by_user(current_user.id)
@@ -109,6 +115,16 @@ async def update_trade_dirty_state(
     db: AsyncSession = Depends(get_db)
 ):
     """Persists dirty state modifications and auto-edits live Telegram channel post if published."""
+    if patch_in.chart_timeframe and patch_in.chart_timeframe != "15m":
+        user_repo = UserRepository(db)
+        db_user = await user_repo.get_by_id(current_user.id)
+        eff_role = "ADMIN" if current_user.role == "ADMIN" else await user_repo.resolve_effective_role(db_user)
+        if eff_role == "USER":
+            raise HTTPException(
+                status_code=403,
+                detail="تغییر تایم‌فریم چارت و تولید مجدد تصویر مخصوص کاربران VIP است."
+            )
+
     trade, needs_sl_check = await TradeService.update_trade_dirty_state(
         session=db,
         user_id=current_user.id,
@@ -151,6 +167,64 @@ async def publish_trade_to_channel(
     except Exception as exc:
         logger.error(f"Unexpected error publishing trade id='{trade_id}': {exc}")
         raise AppException(f"خطا در انتشار معامله: {exc}", status_code=500)
+
+
+@router.post("/{trade_id}/regenerate-chart", response_model=TradeResponseSchema)
+async def regenerate_trade_chart(
+    trade_id: str,
+    payload: dict = Body(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """VIP/ADMIN-only endpoint to change chart timeframe and regenerate mplfinance snapshot."""
+    user_repo = UserRepository(db)
+    db_user = await user_repo.get_by_id(current_user.id)
+    eff_role = "ADMIN" if current_user.role == "ADMIN" else await user_repo.resolve_effective_role(db_user)
+    if eff_role not in ("VIP", "ADMIN"):
+        raise HTTPException(
+            status_code=403,
+            detail="تغییر تایم‌فریم و بازتولید چارت فقط برای کاربران VIP و ادمین مجاز است."
+        )
+
+    timeframe = str(payload.get("timeframe") or "15m").strip()
+    if timeframe not in ("5m", "15m", "1H", "4H"):
+        raise BusinessValidationError("تایم‌فریم نامعتبر است. مقادیر مجاز: 5m, 15m, 1H, 4H")
+
+    repo = TradeRepository(db)
+    trade = await repo.get_by_id_and_user(trade_id, current_user.id)
+    if not trade and eff_role == "ADMIN":
+        trade = await repo.get_by_id(trade_id)
+    if not trade:
+        raise NotFoundError("معامله مورد نظر یافت نشد.")
+
+    df = await MarketService.fetch_ohlcv_dataframe(
+        symbol=trade.symbol,
+        timeframe=timeframe,
+        limit=80,
+        center_price=float(trade.entry_price)
+    )
+    chart_url = await ChartService.generate_trade_chart(
+        trade_id=str(trade.id),
+        symbol=trade.symbol,
+        timeframe=timeframe,
+        entry=float(trade.entry_price),
+        sl=float(trade.stop_loss) if trade.stop_loss else None,
+        tp=float(trade.take_profit) if trade.take_profit else None,
+        df=df,
+    )
+    if trade.chart_image_url and trade.chart_image_url != chart_url:
+        ChartService.remove_chart_file(trade.chart_image_url)
+
+    updated = await repo.update_fields(
+        trade,
+        {
+            "chart_timeframe": timeframe,
+            "chart_image_url": chart_url,
+            "has_chart_snapshot": True,
+            "is_custom_chart": False,
+        },
+    )
+    return TradeService.trade_to_response(updated)
 
 
 @router.post("/{trade_id}/chart-upload")

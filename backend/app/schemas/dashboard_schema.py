@@ -11,6 +11,7 @@ class UserProfileSchema(CamelModel):
     discipline_badge: str
     status: str
     role: str = "USER"
+    subscription_end_date: Optional[str] = None
     photo_url: Optional[str] = None
 
 
@@ -38,3 +39,4 @@ class BootstrapResponseSchema(CamelModel):
     config: DynamicAppConfigSchema
     custom_strategies: List[str]
     trades: List[TradeResponseSchema]
+    vip_config: Optional[Dict[str, Any]] = None

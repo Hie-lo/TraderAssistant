@@ -31,10 +31,12 @@ ENV/
 *.log
 backend/logs/*
 !backend/logs/.gitkeep
-storage/charts_auto/*
-!storage/charts_auto/.gitkeep
-storage/charts_custom/*
-!storage/charts_custom/.gitkeep
+storage/
+backend/storage/charts_auto/*
+!backend/storage/charts_auto/.gitkeep
+backend/storage/charts_custom/*
+!backend/storage/charts_custom/.gitkeep
+backend/storage/receipts/*
 
 # Node / React
 node_modules/
@@ -52,3 +54,4 @@ frontend/node_modules/
 # OS
 .DS_Store
 Thumbs.db
+DB_ps.txt

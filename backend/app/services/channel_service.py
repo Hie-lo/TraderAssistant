@@ -119,11 +119,12 @@ class ChannelService:
         fields_to_save: Dict[str, Any] = {}
 
         if not image_path:
-            timeframe = trade.chart_timeframe or "1H"
+            timeframe = trade.chart_timeframe or "15m"
             df = await MarketService.fetch_ohlcv_dataframe(
                 symbol=trade.symbol,
                 timeframe=timeframe,
-                limit=80
+                limit=80,
+                center_price=float(trade.entry_price)
             )
             chart_url = await ChartService.generate_trade_chart(
                 trade_id=str(trade.id),

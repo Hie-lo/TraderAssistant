@@ -44,7 +44,7 @@ class TradeCreateSchema(CamelModel):
     strategy: Optional[str] = "Price Action"
     entry_reason: Optional[str] = Field(default="", alias="entryReason")
     notes: Optional[str] = ""
-    chart_timeframe: Optional[str] = Field(default="1H", alias="chartTimeframe")
+    chart_timeframe: Optional[str] = Field(default="15m", alias="chartTimeframe")
 
     @field_validator("entry_price", mode="before")
     @classmethod
@@ -103,7 +103,8 @@ class TradeResponseSchema(CamelModel):
     notes: str
     date: str
     has_chart_snapshot: bool = Field(default=False, alias="hasChartSnapshot")
-    chart_timeframe: str = Field(default="1H", alias="chartTimeframe")
+    chart_timeframe: str = Field(default="15m", alias="chartTimeframe")
     custom_chart_url: Optional[str] = Field(default=None, alias="customChartUrl")
+    is_custom_chart: bool = Field(default=False, alias="isCustomChart")
     realized_pnl: Optional[str] = Field(default="0.00", alias="realizedPnl")
     telegram_message_id: Optional[int] = Field(default=None, alias="telegramMessageId")

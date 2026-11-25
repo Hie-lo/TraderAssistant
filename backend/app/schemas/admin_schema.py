@@ -28,6 +28,7 @@ class AdminUserItemSchema(CamelModel):
     ban_reason: Optional[str]
     default_balance: str
     trades_count: int
+    subscription_end_date: Optional[str] = None
     created_at: str
     last_active_at: str
 
@@ -36,3 +37,18 @@ class ChannelTemplateSchema(CamelModel):
     """Schema for reading/updating the Jinja2 channel post template and target channel."""
     template: str
     channel_id: Optional[str] = None
+
+
+class ManualVipEditSchema(CamelModel):
+    """Schema for admin manual VIP day/date/role edits."""
+    action: str  # 'add_days', 'sub_days', 'set_date', 'revoke', 'set_role'
+    days: Optional[int] = None
+    exact_date: Optional[str] = None
+    role: Optional[str] = None
+
+
+class VipSettingsUpdateSchema(CamelModel):
+    """Schema for admin updates to bank card details and VIP plan prices."""
+    admin_card_number: str
+    admin_card_name: str
+    vip_prices: Any

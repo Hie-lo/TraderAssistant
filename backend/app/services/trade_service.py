@@ -64,6 +64,7 @@ class TradeService:
             has_chart_snapshot=trade.has_chart_snapshot,
             chart_timeframe=trade.chart_timeframe,
             custom_chart_url=trade.chart_image_url,
+            is_custom_chart=trade.is_custom_chart,
             realized_pnl=pnl_str,
             telegram_message_id=trade.telegram_message_id
         )
@@ -103,6 +104,11 @@ class TradeService:
         derived_base = (trade_in.base or norm_symbol[:-4]).strip().upper()
         display_pair = trade_in.pair if "/" in trade_in.pair else f"{derived_base} / USDT"
 
+        effective_role = await user_repo.resolve_effective_role(user)
+        requested_tf = trade_in.chart_timeframe or "15m"
+        # Lock initial timeframe to 15m for free users (and default 15m overall)
+        locked_tf = "15m" if effective_role == "USER" else requested_tf
+
         trade = Trade(
             user_id=user_id,
             pair=display_pair,
@@ -125,7 +131,7 @@ class TradeService:
             entry_reason=trade_in.entry_reason or "",
             notes=trade_in.notes or "",
             has_chart_snapshot=True,
-            chart_timeframe=trade_in.chart_timeframe or "1H",
+            chart_timeframe=locked_tf,
             is_custom_chart=False
         )
 

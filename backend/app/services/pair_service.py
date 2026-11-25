@@ -66,18 +66,18 @@ def infer_price_step(raw: Any) -> float:
     if num <= 0:
         return 1.0
     if num >= 10000:
-        return 50.0
-    if num >= 1000:
         return 5.0
-    if num >= 100:
+    if num >= 1000:
         return 1.0
-    if num >= 10:
+    if num >= 100:
         return 0.1
-    if num >= 1:
+    if num >= 10:
         return 0.01
-    if num >= 0.01:
+    if num >= 2:
         return 0.001
-    if num >= 0.0001:
+    if num >= 0.1:
+        return 0.0001
+    if num >= 0.001:
         return 0.00001
     return 0.0000001
 

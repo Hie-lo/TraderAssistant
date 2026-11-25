@@ -12,7 +12,7 @@ DEFAULT_PAIRS = [
         "icon": "₿",
         "color": "text-yellow-500 bg-yellow-500/10",
         "defaultPrice": "64250.00",
-        "step": 50
+        "step": 5
     },
     {
         "symbol": "ETHUSDT",
@@ -21,7 +21,7 @@ DEFAULT_PAIRS = [
         "icon": "Ξ",
         "color": "text-indigo-400 bg-indigo-500/10",
         "defaultPrice": "3420.00",
-        "step": 5
+        "step": 1
     },
     {
         "symbol": "SOLUSDT",
@@ -30,7 +30,7 @@ DEFAULT_PAIRS = [
         "icon": "◎",
         "color": "text-purple-400 bg-purple-500/10",
         "defaultPrice": "148.50",
-        "step": 0.5
+        "step": 0.1
     },
     {
         "symbol": "BNBUSDT",
@@ -39,7 +39,7 @@ DEFAULT_PAIRS = [
         "icon": "❖",
         "color": "text-amber-400 bg-amber-500/10",
         "defaultPrice": "585.00",
-        "step": 1
+        "step": 0.1
     },
     {
         "symbol": "TONUSDT",
@@ -48,7 +48,7 @@ DEFAULT_PAIRS = [
         "icon": "💎",
         "color": "text-sky-400 bg-sky-500/10",
         "defaultPrice": "5.45",
-        "step": 0.05
+        "step": 0.001
     },
     {
         "symbol": "XRPUSDT",
@@ -57,7 +57,7 @@ DEFAULT_PAIRS = [
         "icon": "✕",
         "color": "text-gray-300 bg-gray-500/10",
         "defaultPrice": "0.58",
-        "step": 0.005
+        "step": 0.0001
     }
 ]
 
@@ -88,6 +88,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "telegram_init_data_ttl_sec": 7200,
     "supported_pairs": DEFAULT_PAIRS,
     "default_strategies": DEFAULT_STRATEGIES,
+    "admin_card_number": "6037-9911-0000-0000",
+    "admin_card_name": "مدیر سیستم",
+    "vip_prices": {
+        "1": 290000,
+        "3": 750000,
+        "6": 1350000
+    },
     "channel_id": "",
     "channel_post_template": (
         "📊 <b>گزارش معامله {{ pair }}</b>\n\n"

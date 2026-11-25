@@ -21,6 +21,7 @@ from app.api.middlewares import GlobalErrorCatcherMiddleware
 from app.api.v1.router import api_v1_router
 from app.api.v1.trades import router as trades_router
 from app.api.v1.admin import router as admin_router
+from app.api.v1.payments import router as payments_router
 from app.bot.loader import bot, dp
 from app.bot.middlewares import BotAccessControlMiddleware
 from app.bot.handlers import user_start, user_alerts, user_screener, admin_panel
@@ -172,6 +173,7 @@ app.mount("/static", StaticFiles(directory=settings.STORAGE_DIR), name="static")
 app.include_router(api_v1_router)
 app.include_router(trades_router, prefix="/api", include_in_schema=False)
 app.include_router(admin_router, prefix="/api", include_in_schema=False)
+app.include_router(payments_router, prefix="/api", include_in_schema=False)
 
 
 @app.get("/health", tags=["Health"])

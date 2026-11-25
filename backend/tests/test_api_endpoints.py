@@ -453,3 +453,150 @@ async def test_pair_service_unified_pairs(monkeypatch):
     assert pairs[0]["defaultPrice"] == "95000.50"
     matched = await PairService.find_pair("eth")
     assert matched is not None and matched["symbol"] == "ETHUSDT"
+
+
+@pytest.mark.asyncio
+async def test_vip_subscription_admin_panel_and_chart_features(monkeypatch):
+    import io
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock
+    from PIL import Image
+    import pandas as pd
+    from sqlalchemy import delete
+    from app.models.user import User
+    from app.models.trade import Trade
+    from app.models.payment import Payment
+    from app.repositories.user_repo import UserRepository
+    from app.services.chart_service import ChartService
+    from app.services import market_service
+    from app.core.security import AuthenticatedUser
+    from app.api.deps import get_current_user
+
+    test_uid = 888777666
+    async with AsyncSessionLocal() as session:
+        await session.execute(delete(Payment).where(Payment.user_id == test_uid))
+        await session.execute(delete(Trade).where(Trade.user_id == test_uid))
+        await session.execute(delete(User).where(User.id == test_uid))
+        await session.commit()
+        await UserRepository(session).get_or_create(test_uid, "VipApplicant", "vip_app", role="USER")
+
+    idx = pd.date_range("2026-01-01", periods=20, freq="15min")
+    sample_df = pd.DataFrame(
+        {
+            "open": [62000 + i * 10 for i in range(20)],
+            "high": [62050 + i * 10 for i in range(20)],
+            "low": [61950 + i * 10 for i in range(20)],
+            "close": [62020 + i * 10 for i in range(20)],
+            "volume": [100.0] * 20,
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(market_service.MarketService, "fetch_ohlcv_dataframe", AsyncMock(return_value=sample_df))
+
+    # 1. Verify ChartService.render_chart_bytes generates PNG strictly in memory (BytesIO)
+    chart_bytes = await ChartService.render_chart_bytes("BTCUSDT", "15m", 62100.0, 61900.0, 62400.0, sample_df)
+    assert chart_bytes.startswith(b"\x89PNG")
+
+    # Build a small valid PNG receipt in memory
+    img_buf = io.BytesIO()
+    Image.new("RGB", (60, 60), color=(30, 144, 255)).save(img_buf, format="PNG")
+    receipt_bytes = img_buf.getvalue()
+
+    headers = {"X-Telegram-Init-Data": "DEV_MOCK_USER"}
+    try:
+        # Step A: User submits VIP receipt & creates a trade (locked to 15m)
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+            id=test_uid, first_name="VipApplicant", role="USER"
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            plans_res = await ac.get("/api/vip/plans", headers=headers)
+            assert plans_res.status_code == 200
+            assert "vipPrices" in plans_res.json()
+
+            pay_res = await ac.post(
+                "/api/payments",
+                data={"plan_duration": "3"},
+                files={"file": ("receipt.png", receipt_bytes, "image/png")},
+                headers=headers,
+            )
+            assert pay_res.status_code == 201
+            payment_id = pay_res.json()["payment"]["id"]
+
+            tr_res = await ac.post(
+                "/api/trades",
+                json={
+                    "pair": "BTC / USDT",
+                    "base": "BTC",
+                    "isLong": True,
+                    "entryPrice": 62100,
+                    "stopLoss": 61900,
+                    "takeProfit": 62400,
+                    "leverage": 10,
+                    "balance": 1000,
+                    "riskType": "%",
+                    "riskValue": 2,
+                    "chartTimeframe": "4H",
+                },
+                headers=headers,
+            )
+            assert tr_res.status_code == 201
+            trade_id = tr_res.json()["id"]
+            assert tr_res.json()["chartTimeframe"] == "15m"
+
+            # Normal user cannot regenerate chart timeframe -> 403
+            forbid_regen = await ac.post(
+                f"/api/trades/{trade_id}/regenerate-chart",
+                json={"timeframe": "1H"},
+                headers=headers,
+            )
+            assert forbid_regen.status_code == 403
+
+            # Step B: Admin reviews & approves payment, and edits VIP settings
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+                id=111111111, first_name="Admin", role="ADMIN"
+            )
+            pending_res = await ac.get("/api/admin/payments?status=PENDING", headers=headers)
+            assert pending_res.status_code == 200
+            assert any(p["id"] == payment_id for p in pending_res.json())
+
+            app_res = await ac.post(f"/api/admin/payments/{payment_id}/approve", headers=headers)
+            assert app_res.status_code == 200
+            assert app_res.json()["userRole"] == "VIP"
+            assert app_res.json()["subscriptionEndDate"] is not None
+
+            # Manual VIP edit: add 10 days
+            man_res = await ac.post(
+                f"/api/admin/users/{test_uid}/vip",
+                json={"action": "add_days", "days": 10},
+                headers=headers,
+            )
+            assert man_res.status_code == 200
+            assert man_res.json()["role"] == "VIP"
+
+            # Step C: Now upgraded VIP user can regenerate chart to 1H
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+                id=test_uid, first_name="VipApplicant", role="USER"
+            )
+            vip_regen = await ac.post(
+                f"/api/trades/{trade_id}/regenerate-chart",
+                json={"timeframe": "1H"},
+                headers=headers,
+            )
+            assert vip_regen.status_code == 200
+            assert vip_regen.json()["chartTimeframe"] == "1H"
+            assert vip_regen.json()["isCustomChart"] is False
+
+        # Step D: Expired VIP auto-downgrades cleanly to USER
+        async with AsyncSessionLocal() as session:
+            u_repo = UserRepository(session)
+            db_u = await u_repo.get_by_id(test_uid)
+            db_u.subscription_end_date = datetime.now(timezone.utc) - timedelta(days=1)
+            await session.commit()
+            assert await u_repo.resolve_effective_role(db_u) == "USER"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(Payment).where(Payment.user_id == test_uid))
+            await session.execute(delete(Trade).where(Trade.user_id == test_uid))
+            await session.execute(delete(User).where(User.id == test_uid))
+            await session.commit()

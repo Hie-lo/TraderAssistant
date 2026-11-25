@@ -69,15 +69,17 @@ async def start_alert_wizard(query: CallbackQuery, state: FSMContext):
 
     # 1. Freemium / VIP check before entering FSM (DB role as single source of truth)
     async with AsyncSessionLocal() as session:
-        db_user = await UserRepository(session).get_or_create(
+        user_repo = UserRepository(session)
+        db_user = await user_repo.get_or_create(
             telegram_id=user.id,
             first_name=user.first_name or "کاربر",
             username=user.username
         )
+        effective_role = await user_repo.resolve_effective_role(db_user)
         active_count = await AlertRepository(session).count_active_by_user(user.id)
 
     free_max_alerts = int(DynamicConfig.get("free_max_alerts", 3))
-    if db_user.role == "USER" and active_count >= free_max_alerts:
+    if effective_role == "USER" and active_count >= free_max_alerts:
         await query.message.answer(
             f"🔒 <b>محدودیت حساب رایگان</b>\n\n"
             f"کاربران رایگان مجاز به داشتن حداکثر <b>{free_max_alerts} هشدار قیمت فعال هم‌زمان</b> هستند "

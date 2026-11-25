@@ -42,7 +42,11 @@ async def ensure_schema_columns(conn: AsyncConnection) -> None:
     """Idempotently adds new columns on existing databases where create_all does not alter tables."""
     if engine.dialect.name == "postgresql":
         await conn.execute(text("ALTER TABLE trades ADD COLUMN IF NOT EXISTS telegram_message_id INTEGER"))
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_end_date TIMESTAMPTZ"))
     else:
-        cols = (await conn.execute(text("PRAGMA table_info(trades)"))).fetchall()
-        if cols and not any(c[1] == "telegram_message_id" for c in cols):
+        trade_cols = (await conn.execute(text("PRAGMA table_info(trades)"))).fetchall()
+        if trade_cols and not any(c[1] == "telegram_message_id" for c in trade_cols):
             await conn.execute(text("ALTER TABLE trades ADD COLUMN telegram_message_id INTEGER"))
+        user_cols = (await conn.execute(text("PRAGMA table_info(users)"))).fetchall()
+        if user_cols and not any(c[1] == "subscription_end_date" for c in user_cols):
+            await conn.execute(text("ALTER TABLE users ADD COLUMN subscription_end_date DATETIME"))

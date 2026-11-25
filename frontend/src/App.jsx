@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { api } from './api/client';
+import VipUpgradeModal from './components/VipUpgradeModal';
+import AdminCustomerPanel from './components/AdminCustomerPanel';
 
 const FALLBACK_PAIRS = [
-  { symbol: 'BTCUSDT', label: 'BTC / USDT', base: 'BTC', icon: '₿', color: 'text-yellow-500 bg-yellow-500/10', defaultPrice: '64250.00', step: 50 },
-  { symbol: 'ETHUSDT', label: 'ETH / USDT', base: 'ETH', icon: 'Ξ', color: 'text-indigo-400 bg-indigo-500/10', defaultPrice: '3420.00', step: 5 },
-  { symbol: 'SOLUSDT', label: 'SOL / USDT', base: 'SOL', icon: '◎', color: 'text-purple-400 bg-purple-500/10', defaultPrice: '148.50', step: 0.5 },
-  { symbol: 'BNBUSDT', label: 'BNB / USDT', base: 'BNB', icon: '❖', color: 'text-amber-400 bg-amber-500/10', defaultPrice: '585.00', step: 1 },
-  { symbol: 'TONUSDT', label: 'TON / USDT', base: 'TON', icon: '💎', color: 'text-sky-400 bg-sky-500/10', defaultPrice: '5.45', step: 0.05 },
-  { symbol: 'XRPUSDT', label: 'XRP / USDT', base: 'XRP', icon: '✕', color: 'text-gray-300 bg-gray-500/10', defaultPrice: '0.58', step: 0.005 },
+  { symbol: 'BTCUSDT', label: 'BTC / USDT', base: 'BTC', icon: '\u20bf', color: 'text-yellow-500 bg-yellow-500/10', defaultPrice: '64250.00', step: 5 },
+  { symbol: 'ETHUSDT', label: 'ETH / USDT', base: 'ETH', icon: '\u039e', color: 'text-indigo-400 bg-indigo-500/10', defaultPrice: '3420.00', step: 1 },
+  { symbol: 'SOLUSDT', label: 'SOL / USDT', base: 'SOL', icon: '\u25ce', color: 'text-purple-400 bg-purple-500/10', defaultPrice: '148.50', step: 0.1 },
+  { symbol: 'BNBUSDT', label: 'BNB / USDT', base: 'BNB', icon: '\u2756', color: 'text-amber-400 bg-amber-500/10', defaultPrice: '585.00', step: 0.1 },
+  { symbol: 'TONUSDT', label: 'TON / USDT', base: 'TON', icon: '\U0001f48e', color: 'text-sky-400 bg-sky-500/10', defaultPrice: '5.45', step: 0.001 },
+  { symbol: 'XRPUSDT', label: 'XRP / USDT', base: 'XRP', icon: '\u2715', color: 'text-gray-300 bg-gray-500/10', defaultPrice: '0.58', step: 0.0001 },
 ];
 
 const FALLBACK_STRATEGIES = [
@@ -89,13 +91,13 @@ const formatPairPrice = (raw) => {
 const inferPriceStep = (raw) => {
   const num = parseFloat(raw);
   if (isNaN(num) || num <= 0) return 1;
-  if (num >= 10000) return 50;
-  if (num >= 1000) return 5;
-  if (num >= 100) return 1;
-  if (num >= 10) return 0.1;
-  if (num >= 1) return 0.01;
-  if (num >= 0.01) return 0.001;
-  if (num >= 0.0001) return 0.00001;
+  if (num >= 10000) return 5;
+  if (num >= 1000) return 1;
+  if (num >= 100) return 0.1;
+  if (num >= 10) return 0.01;
+  if (num >= 2) return 0.001;
+  if (num >= 0.1) return 0.0001;
+  if (num >= 0.001) return 0.00001;
   return 0.0000001;
 };
 
@@ -140,6 +142,10 @@ const App = () => {
   const [pairs, setPairs] = useState(FALLBACK_PAIRS);
   const [pairsLoading, setPairsLoading] = useState(false);
   const [userRole, setUserRole] = useState('USER');
+  const [subscriptionEndDate, setSubscriptionEndDate] = useState(null);
+  const [vipConfig, setVipConfig] = useState(null);
+  const [isVipModalOpen, setIsVipModalOpen] = useState(false);
+  const [isRegeneratingChart, setIsRegeneratingChart] = useState(false);
   const [channelTemplate, setChannelTemplate] = useState('');
   const [channelIdInput, setChannelIdInput] = useState('');
   const [isLoadingTemplate, setIsLoadingTemplate] = useState(false);
@@ -232,6 +238,12 @@ const App = () => {
         }
         if (data.user?.role) {
           setUserRole(data.user.role);
+        }
+        if (data.user?.subscriptionEndDate !== undefined) {
+          setSubscriptionEndDate(data.user.subscriptionEndDate);
+        }
+        if (data.vipConfig) {
+          setVipConfig(data.vipConfig);
         }
         if (data.user?.default_balance) {
           setBalance(data.user.default_balance);
@@ -615,19 +627,58 @@ const App = () => {
     if (livePrice) setEntryPrice(livePrice);
   }, [livePrice]);
 
-  // --- Step Price Helper (Starts from Live Price if empty) ---
-  const adjustPriceField = (currentValue, setter, direction) => {
-    const step = selectedPair.step || inferPriceStep(livePrice);
+  // --- Hold-to-Scroll Price Stepper with 500ms Acceleration ---
+  const holdTimeoutRef = useRef(null);
+  const holdIntervalRef = useRef(null);
+  const entryRef = useRef(entryPrice);
+  const livePriceRef = useRef(livePrice);
+  entryRef.current = entryPrice;
+  livePriceRef.current = livePrice;
+
+  const computeSteppedPrice = useCallback((currentValue, direction) => {
+    const step = selectedPair.step || inferPriceStep(livePriceRef.current);
     const stepStr = step.toString();
-    const decimals = stepStr.includes('.') ? stepStr.split('.')[1].length : 2;
-    // decimals computed dynamically above
+    const decimals = stepStr.includes('e-')
+      ? parseInt(stepStr.split('e-')[1], 10)
+      : (stepStr.includes('.') ? stepStr.split('.')[1].length : 2);
     const baseNum =
       currentValue !== '' && !isNaN(parseFloat(currentValue))
         ? parseFloat(currentValue)
-        : parseFloat(entryPrice) || parseFloat(livePrice) || 0;
+        : parseFloat(entryRef.current) || parseFloat(livePriceRef.current) || 0;
 
     const nextVal = Math.max(0, baseNum + direction * step);
-    setter(Number(nextVal.toFixed(decimals)).toString());
+    return Number(nextVal.toFixed(Math.min(8, decimals))).toString();
+  }, [selectedPair.step]);
+
+  const stopPriceHold = useCallback(() => {
+    if (holdTimeoutRef.current) {
+      clearTimeout(holdTimeoutRef.current);
+      holdTimeoutRef.current = null;
+    }
+    if (holdIntervalRef.current) {
+      clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopPriceHold(), [stopPriceHold]);
+
+  const adjustPriceField = (currentValue, setter, direction) => {
+    setter(computeSteppedPrice(currentValue, direction));
+  };
+
+  const startPriceHold = (setter, direction) => {
+    stopPriceHold();
+    setter((prev) => computeSteppedPrice(prev, direction));
+    holdIntervalRef.current = setInterval(() => {
+      setter((prev) => computeSteppedPrice(prev, direction));
+    }, 170);
+    holdTimeoutRef.current = setTimeout(() => {
+      if (holdIntervalRef.current) clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = setInterval(() => {
+        setter((prev) => computeSteppedPrice(prev, direction));
+      }, 45);
+    }, 500);
   };
 
   const handlePriceKeyDown = (e, currentValue, setter) => {
@@ -637,6 +688,29 @@ const App = () => {
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       adjustPriceField(currentValue, setter, -1);
+    }
+  };
+
+  const handleRegenerateChart = async (tf) => {
+    if (!draftTrade || isRegeneratingChart) return;
+    if (userRole === 'USER') {
+      setIsVipModalOpen(true);
+      return;
+    }
+    setIsRegeneratingChart(true);
+    setJournalErrorToast(null);
+    try {
+      const updated = await api.regenerateTradeChart(draftTrade.id, tf);
+      setDraftTrade((prev) => (prev ? { ...prev, ...updated } : updated));
+      setTrades((prev) => prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)));
+    } catch (err) {
+      if (String(err.message || '').includes('VIP')) {
+        setIsVipModalOpen(true);
+      } else {
+        setJournalErrorToast(err.message || '\u062e\u0637\u0627 \u062f\u0631 \u062a\u0648\u0644\u06cc\u062f \u0645\u062c\u062f\u062f \u0686\u0627\u0631\u062a');
+      }
+    } finally {
+      setIsRegeneratingChart(false);
     }
   };
 
@@ -805,7 +879,7 @@ const App = () => {
       strategy: defaultStrategies[0] || 'Price Action',
       entry_reason: '',
       notes: '',
-      chart_timeframe: '1H'
+      chart_timeframe: '15m'
     };
 
     setIsSavingTrade(true);
@@ -992,7 +1066,9 @@ const App = () => {
             className={`w-full object-cover ${isLarge ? 'max-h-[60vh] sm:max-h-[440px]' : 'h-44 sm:h-52 md:h-60'}`}
           />
           <div className="absolute top-2 right-2 bg-gray-950/80 backdrop-blur px-2 py-0.5 rounded text-[10px] text-blue-400 border border-gray-800">
-            تصویر آپلود شده توسط کاربر
+          <div className="absolute top-2 right-2 bg-gray-950/80 backdrop-blur px-2 py-0.5 rounded text-[10px] text-blue-400 border border-gray-800">
+            {trade.isCustomChart ? 'تصویر آپلود شده توسط کاربر' : `چارت واقعی (${trade.chartTimeframe || '15m'})`}
+          </div>
           </div>
         </div>
       );
@@ -1040,7 +1116,7 @@ const App = () => {
           <div className="flex items-center gap-1.5 sm:gap-2">
             <span className="font-bold text-white">{trade.pair}</span>
             <span className="bg-blue-500/20 text-blue-400 px-1.5 py-0.2 rounded border border-blue-500/30">
-              {trade.chartTimeframe || '1H'}
+              {trade.chartTimeframe || '15m'}
             </span>
             <span className="text-gray-500 hidden xs:inline">mplfinance • Auto-Snapshot</span>
           </div>
@@ -1302,13 +1378,27 @@ const App = () => {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('calc')}
-                className="shrink-0 whitespace-nowrap bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-400 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
-              >
-                <span>+ ترید جدید</span>
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsVipModalOpen(true)}
+                  className={`shrink-0 whitespace-nowrap px-2.5 py-2 sm:py-2.5 rounded-xl text-[10px] sm:text-xs font-bold border flex items-center gap-1 transition-all active:scale-95 ${
+                    userRole === 'VIP' || userRole === 'ADMIN'
+                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-300'
+                      : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
+                  }`}
+                >
+                  <span>👑</span>
+                  <span>{userRole === 'VIP' ? 'VIP فعال' : userRole === 'ADMIN' ? 'مدیریت VIP' : 'ارتقا VIP'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('calc')}
+                  className="shrink-0 whitespace-nowrap bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-400 px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
+                >
+                  <span>+ ترید جدید</span>
+                </button>
+              </div>
             </div>
 
             {/* Hero Portfolio & Balance Card */}
@@ -1774,7 +1864,12 @@ const App = () => {
                     <div className="absolute right-0 inset-y-0 w-6 flex flex-col border-l border-gray-800 bg-gray-900/80">
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(entryPrice, setEntryPrice, 1)}
+                        onMouseDown={() => startPriceHold(setEntryPrice, 1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setEntryPrice, 1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-white hover:bg-gray-800"
                         title="افزایش از قیمت فعلی"
                       >
@@ -1782,7 +1877,12 @@ const App = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(entryPrice, setEntryPrice, -1)}
+                        onMouseDown={() => startPriceHold(setEntryPrice, -1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setEntryPrice, -1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-white hover:bg-gray-800 border-t border-gray-800"
                         title="کاهش از قیمت فعلی"
                       >
@@ -1812,7 +1912,12 @@ const App = () => {
                     <div className="absolute right-0 inset-y-0 w-6 flex flex-col border-l border-gray-800 bg-gray-900/80">
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(stopLossPrice, setStopLossPrice, 1)}
+                        onMouseDown={() => startPriceHold(setStopLossPrice, 1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setStopLossPrice, 1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-rose-400 hover:bg-gray-800"
                         title="افزایش از قیمت فعلی"
                       >
@@ -1820,7 +1925,12 @@ const App = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(stopLossPrice, setStopLossPrice, -1)}
+                        onMouseDown={() => startPriceHold(setStopLossPrice, -1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setStopLossPrice, -1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-rose-400 hover:bg-gray-800 border-t border-gray-800"
                         title="کاهش از قیمت فعلی"
                       >
@@ -1850,7 +1960,12 @@ const App = () => {
                     <div className="absolute right-0 inset-y-0 w-6 flex flex-col border-l border-gray-800 bg-gray-900/80">
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(takeProfitPrice, setTakeProfitPrice, 1)}
+                        onMouseDown={() => startPriceHold(setTakeProfitPrice, 1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setTakeProfitPrice, 1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-emerald-400 hover:bg-gray-800"
                         title="افزایش از قیمت فعلی"
                       >
@@ -1858,7 +1973,12 @@ const App = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => adjustPriceField(takeProfitPrice, setTakeProfitPrice, -1)}
+                        onMouseDown={() => startPriceHold(setTakeProfitPrice, -1)}
+                        onMouseUp={stopPriceHold}
+                        onMouseLeave={stopPriceHold}
+                        onTouchStart={(e) => { e.preventDefault(); startPriceHold(setTakeProfitPrice, -1); }}
+                        onTouchEnd={stopPriceHold}
+                        onTouchCancel={stopPriceHold}
                         className="flex-1 flex items-center justify-center text-[8px] text-gray-400 hover:text-emerald-400 hover:bg-gray-800 border-t border-gray-800"
                         title="کاهش از قیمت فعلی"
                       >
@@ -1956,9 +2076,20 @@ const App = () => {
 
               {/* Save Error Alert */}
               {saveErrorToast && (
-                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex items-center justify-between gap-2">
-                  <span className="text-rose-300 text-xs">{saveErrorToast}</span>
-                  <button type="button" onClick={() => setSaveErrorToast(null)} className="text-rose-400 text-xs px-1">✕</button>
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-rose-300 text-xs flex-1">{saveErrorToast}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {String(saveErrorToast).includes('VIP') && (
+                      <button
+                        type="button"
+                        onClick={() => setIsVipModalOpen(true)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-gray-950 text-[10px] font-bold"
+                      >
+                        \U0001f451 \u0627\u0631\u062a\u0642\u0627 \u0628\u0647 VIP
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setSaveErrorToast(null)} className="text-rose-400 text-xs px-1">\u2715</button>
+                  </div>
                 </div>
               )}
 
@@ -2248,23 +2379,41 @@ const App = () => {
                   className="hidden"
                 />
 
-                <div className="flex items-center gap-1.5">
-                  {(draftTrade.hasChartSnapshot || draftTrade.customChartUrl) && !draftTrade.customChartUrl && (
-                    <div className="flex bg-gray-950 p-0.5 rounded-lg border border-gray-800 shrink-0">
-                      {['15m', '1H', '4H'].map((tf) => (
-                        <button
-                          key={tf}
-                          type="button"
-                          onClick={() => updateDraftField('chartTimeframe', tf)}
-                          className={`px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold transition-colors ${
-                            (draftTrade.chartTimeframe || '1H') === tf
-                              ? 'bg-blue-600 text-white'
-                              : 'text-gray-500 hover:text-gray-300'
-                          }`}
-                        >
-                          {tf}
-                        </button>
-                      ))}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {!draftTrade.isCustomChart && (
+                    <div className="flex items-center gap-1 bg-gray-950 p-0.5 rounded-lg border border-gray-800 shrink-0">
+                      {['5m', '15m', '1H', '4H'].map((tf) => {
+                        const isVip = userRole === 'VIP' || userRole === 'ADMIN';
+                        const isLocked = !isVip && tf !== '15m';
+                        const isActive = (draftTrade.chartTimeframe || '15m') === tf;
+                        return (
+                          <button
+                            key={tf}
+                            type="button"
+                            disabled={isRegeneratingChart}
+                            onClick={() => (isLocked ? setIsVipModalOpen(true) : handleRegenerateChart(tf))}
+                            className={`px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold transition-colors flex items-center gap-0.5 ${
+                              isActive
+                                ? 'bg-blue-600 text-white'
+                                : isLocked
+                                ? 'text-gray-600 hover:text-amber-300'
+                                : 'text-gray-400 hover:text-gray-200'
+                            }`}
+                            title={isLocked ? '\u0645\u062e\u0635\u0648\u0635 \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 VIP' : `\u062a\u0648\u0644\u06cc\u062f \u0686\u0627\u0631\u062a ${tf}`}
+                          >
+                            {tf}{isLocked && <span className="text-[8px]">\U0001f512</span>}
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        disabled={isRegeneratingChart}
+                        onClick={() => (userRole === 'USER' ? setIsVipModalOpen(true) : handleRegenerateChart(draftTrade.chartTimeframe || '15m'))}
+                        className="px-1.5 py-0.5 rounded text-[9px] font-bold text-indigo-300 hover:bg-indigo-500/20 border-r border-gray-800"
+                        title="\u0628\u0627\u0632\u062a\u0648\u0644\u06cc\u062f \u0686\u0627\u0631\u062a"
+                      >
+                        {isRegeneratingChart ? '...' : (userRole === 'USER' ? '\U0001f504\U0001f512' : '\U0001f504')}
+                      </button>
                     </div>
                   )}
 
@@ -2697,115 +2846,18 @@ const App = () => {
           </div>
         )}
 
-        {/* ==================== TAB 4A: ADMIN / MANAGE PANEL (RBAC: ADMIN ONLY) ==================== */}
+        {/* ==================== TAB 4A: ADMIN CUSTOMER & CHANNEL MANAGEMENT ==================== */}
         {activeTab === 'admin' && userRole === 'ADMIN' && (
-          <div className="p-3.5 sm:p-5 flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pb-6">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 pb-3">
-              <div>
-                <h2 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                  🛡️ پنل مدیریت و انتشار کانال
-                </h2>
-                <span className="text-[10px] sm:text-xs text-gray-400">تنظیم قالب پیام Jinja2 و کانال مقصد تلگرام</span>
-              </div>
-              <span className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-xl text-[10px] sm:text-xs font-mono font-bold">
-                ROLE: ADMIN
-              </span>
-            </div>
-
-            {isLoadingTemplate ? (
-              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-6 text-center text-xs text-gray-400">
-                در حال بارگذاری تنظیمات قالب...
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Target Channel ID */}
-                <div className="bg-gray-950 border border-gray-800 rounded-2xl p-3.5 sm:p-4 space-y-2">
-                  <label className="text-xs font-bold text-gray-300 block">
-                    شناسه کانال مقصد (CHANNEL_ID)
-                  </label>
-                  <input
-                    dir="ltr"
-                    type="text"
-                    value={channelIdInput}
-                    onChange={(e) => { setChannelIdInput(e.target.value); setTemplateFeedback(null); }}
-                    placeholder="-1001234567890 یا @my_trading_channel"
-                    className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs sm:text-sm font-mono text-white outline-none"
-                  />
-                  <span className="text-[10px] text-gray-500 block">
-                    ربات باید ادمین کانال باشد. در صورت خالی بودن از مقدار پیش‌فرض سرور (.env) استفاده می‌شود.
-                  </span>
-                </div>
-
-                {/* Jinja2 Channel Post Template */}
-                <div className="bg-gray-950 border border-gray-800 rounded-2xl p-3.5 sm:p-4 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <label className="text-xs font-bold text-gray-300">قالب پست کانال (Jinja2 + HTML)</label>
-                    <span className="text-[10px] text-gray-500 font-mono">Max 1024 chars</span>
-                  </div>
-
-                  <textarea
-                    dir="ltr"
-                    rows="8"
-                    value={channelTemplate}
-                    onChange={(e) => { setChannelTemplate(e.target.value); setTemplateFeedback(null); }}
-                    placeholder="Entry: {{ entry_price }} | SL: {{ sl }} | TP: {{ tp }}"
-                    className="w-full bg-gray-900 border border-gray-700 focus:border-indigo-500 rounded-xl p-3 text-xs font-mono text-gray-100 outline-none leading-relaxed"
-                  />
-
-                  {/* Clickable Jinja2 Variable Helper Chips */}
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] text-gray-400 block">متغیرهای آماده (برای درج کلیک کنید):</span>
-                    <div dir="ltr" className="flex flex-wrap gap-1.5">
-                      {[
-                        '{{ pair }}',
-                        '{{ direction }}',
-                        '{{ entry_price }}',
-                        '{{ sl }}',
-                        '{{ tp }}',
-                        '{{ leverage }}',
-                        '{{ rr }}',
-                        '{{ status }}',
-                        '{{ strategy }}',
-                        '{{ notes }}'
-                      ].map((token) => (
-                        <button
-                          key={token}
-                          type="button"
-                          onClick={() => setChannelTemplate((prev) => `${prev}${prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : ''}${token}`)}
-                          className="px-2 py-0.5 rounded-md bg-gray-900 hover:bg-indigo-600/25 border border-gray-800 hover:border-indigo-500/40 text-[10px] font-mono text-indigo-300 transition-colors"
-                        >
-                          {token}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {templateFeedback && (
-                  <div className={`text-xs px-3 py-2.5 rounded-xl border ${
-                    templateFeedback.type === 'success'
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                  }`}>
-                    {templateFeedback.msg}
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleSaveAdminTemplate}
-                  disabled={isSavingTemplate}
-                  className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
-                    isSavingTemplate
-                      ? 'bg-indigo-600/40 text-indigo-200 cursor-wait'
-                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 active:scale-[0.98]'
-                  }`}
-                >
-                  {isSavingTemplate ? 'در حال ذخیره...' : 'ذخیره قالب انتشار کانال'}
-                </button>
-              </div>
-            )}
-          </div>
+          <AdminCustomerPanel
+            channelTemplate={channelTemplate}
+            setChannelTemplate={setChannelTemplate}
+            channelIdInput={channelIdInput}
+            setChannelIdInput={setChannelIdInput}
+            isLoadingTemplate={isLoadingTemplate}
+            isSavingTemplate={isSavingTemplate}
+            templateFeedback={templateFeedback}
+            onSaveTemplate={handleSaveAdminTemplate}
+          />
         )}
 
         {/* ==================== TAB 4: EMPTY PLACEHOLDER SLOT ==================== */}
@@ -2911,6 +2963,18 @@ const App = () => {
         </div>
 
       </div>
+
+      <VipUpgradeModal
+        isOpen={isVipModalOpen}
+        onClose={() => setIsVipModalOpen(false)}
+        userRole={userRole}
+        subscriptionEndDate={subscriptionEndDate}
+        initialVipConfig={vipConfig}
+        onVipUpdated={(newRole, newEnd) => {
+          setUserRole(newRole);
+          setSubscriptionEndDate(newEnd);
+        }}
+      />
     </div>
   );
 };

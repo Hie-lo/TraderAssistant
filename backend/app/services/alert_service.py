@@ -29,9 +29,11 @@ class AlertService:
     ) -> PriceAlert:
         alert_repo = AlertRepository(session)
 
-        # Check Freemium / VIP active alerts limit (DB user.role as single source of truth)
-        db_user = await UserRepository(session).get_by_id(user_id)
-        if not db_user or db_user.role == "USER":
+        # Check Freemium / VIP active alerts limit (DB user.role + expiration check)
+        user_repo = UserRepository(session)
+        db_user = await user_repo.get_by_id(user_id)
+        effective_role = await user_repo.resolve_effective_role(db_user)
+        if effective_role == "USER":
             max_alerts = int(DynamicConfig.get("free_max_alerts", 3))
             active_count = await alert_repo.count_active_by_user(user_id)
             if active_count >= max_alerts:

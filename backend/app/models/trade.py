@@ -34,7 +34,7 @@ class Trade(Base):
     entry_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     has_chart_snapshot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    chart_timeframe: Mapped[str] = mapped_column(String(8), default="1H", nullable=False)  # '15m', '1H', '4H'
+    chart_timeframe: Mapped[str] = mapped_column(String(8), default="15m", nullable=False)  # '5m', '15m', '1H', '4H'
     chart_image_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     is_custom_chart: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     telegram_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

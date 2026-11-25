@@ -67,6 +67,54 @@ export const api = {
       body: JSON.stringify({ template, channelId }),
     }),
 
+  regenerateTradeChart: (tradeId, timeframe) =>
+    request(`/api/v1/trades/${tradeId}/regenerate-chart`, {
+      method: "POST",
+      body: JSON.stringify({ timeframe }),
+    }),
+
+  getVipPlans: () => request("/api/v1/vip/plans"),
+
+  submitVipPayment: (planDuration, file) => {
+    const formData = new FormData();
+    formData.append("plan_duration", String(planDuration));
+    formData.append("file", file);
+    return request("/api/v1/payments", {
+      method: "POST",
+      body: formData,
+      headers: {},
+    });
+  },
+
+  getAdminPayments: (status = "PENDING") =>
+    request(`/api/v1/admin/payments?status=${encodeURIComponent(status)}`),
+
+  approveAdminPayment: (paymentId) =>
+    request(`/api/v1/admin/payments/${paymentId}/approve`, { method: "POST" }),
+
+  rejectAdminPayment: (paymentId) =>
+    request(`/api/v1/admin/payments/${paymentId}/reject`, { method: "POST" }),
+
+  getAdminUsers: () => request("/api/v1/admin/users"),
+
+  updateAdminUserStatus: (userId, payload) =>
+    request(`/api/v1/admin/users/${userId}/status`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  manualEditUserVip: (userId, payload) =>
+    request(`/api/v1/admin/users/${userId}/vip`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateVipSettings: (payload) =>
+    request("/api/v1/admin/vip-settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
   deleteTrade: (tradeId) =>
     request(`/api/v1/trades/${tradeId}`, {
       method: "DELETE",

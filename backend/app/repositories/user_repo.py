@@ -45,6 +45,32 @@ class UserRepository(BaseRepository[User]):
             await self.session.commit()
         return user
 
+    async def resolve_effective_role(self, user: Optional[User]) -> str:
+        """Auto-downgrades expired VIP accounts back to USER while preserving ADMIN/active VIP."""
+        if not user:
+            return "USER"
+        if user.role == "VIP" and user.subscription_end_date is not None:
+            end_dt = user.subscription_end_date
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            if end_dt <= datetime.now(timezone.utc):
+                user.role = "USER"
+                await self.session.commit()
+                await self.session.refresh(user)
+        return user.role
+
+    async def update_vip_subscription(
+        self,
+        user: User,
+        role: str,
+        subscription_end_date: Optional[datetime]
+    ) -> User:
+        user.role = role
+        user.subscription_end_date = subscription_end_date
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
     async def update_balance(self, user_id: int, new_balance: Decimal) -> None:
         user = await self.get_by_id(user_id)
         if user and new_balance > 0:
@@ -64,6 +90,32 @@ class UserRepository(BaseRepository[User]):
             user.ban_reason = ban_reason
             user.banned_until = banned_until
             await self.session.commit()
+        return user
+
+    async def resolve_effective_role(self, user: Optional[User]) -> str:
+        """Auto-downgrades expired VIP accounts back to USER while preserving ADMIN/active VIP."""
+        if not user:
+            return "USER"
+        if user.role == "VIP" and user.subscription_end_date is not None:
+            end_dt = user.subscription_end_date
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            if end_dt <= datetime.now(timezone.utc):
+                user.role = "USER"
+                await self.session.commit()
+                await self.session.refresh(user)
+        return user.role
+
+    async def update_vip_subscription(
+        self,
+        user: User,
+        role: str,
+        subscription_end_date: Optional[datetime]
+    ) -> User:
+        user.role = role
+        user.subscription_end_date = subscription_end_date
+        await self.session.commit()
+        await self.session.refresh(user)
         return user
 
     async def list_users_with_trade_count(self, limit: int = 50, offset: int = 0) -> List[tuple[User, int]]:
