@@ -5,24 +5,20 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 from app.database.session import AsyncSessionLocal
 from app.services.market_service import MarketService
 from app.services.admin_service import AdminService
+from app.bot.filters import is_db_admin
 from app.bot.states import AdminFSM
 from app.bot.keyboards import get_admin_panel_keyboard
 
 router = Router()
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in settings.SUPER_ADMIN_IDS
-
-
 @router.message(Command("admin"))
 async def open_admin_panel(message: Message):
-    if not is_admin(message.from_user.id):
+    if not message.from_user or not await is_db_admin(message.from_user.id):
         await message.answer("⛔ شما به پنل مدیریت دسترسی ندارید.")
         return
 
@@ -38,7 +34,7 @@ async def open_admin_panel(message: Message):
 
 @router.callback_query(F.data == "adm_toggle_maint")
 async def toggle_maintenance(query: CallbackQuery):
-    if not is_admin(query.from_user.id):
+    if not query.from_user or not await is_db_admin(query.from_user.id):
         await query.answer("دسترسی رد شد.", show_alert=True)
         return
 
@@ -63,7 +59,7 @@ async def toggle_maintenance(query: CallbackQuery):
 
 @router.callback_query(F.data == "adm_watchdog_status")
 async def check_watchdog_status(query: CallbackQuery):
-    if not is_admin(query.from_user.id):
+    if not query.from_user or not await is_db_admin(query.from_user.id):
         await query.answer("دسترسی رد شد.", show_alert=True)
         return
 
@@ -104,7 +100,7 @@ async def check_watchdog_status(query: CallbackQuery):
 
 @router.callback_query(F.data == "adm_ban_user")
 async def start_ban_flow(query: CallbackQuery, state: FSMContext):
-    if not is_admin(query.from_user.id):
+    if not query.from_user or not await is_db_admin(query.from_user.id):
         await query.answer("دسترسی رد شد.", show_alert=True)
         return
 

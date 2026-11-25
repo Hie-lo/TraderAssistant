@@ -8,6 +8,7 @@ from app.database.session import AsyncSessionLocal
 from app.repositories.user_repo import UserRepository
 from app.repositories.trade_repo import TradeRepository
 from app.services.trade_service import TradeService
+from app.bot.filters import is_db_admin
 from app.bot.keyboards import get_main_menu_keyboard, get_admin_panel_keyboard
 
 router = Router()
@@ -21,15 +22,19 @@ async def handle_start(message: Message):
 
     first_name_safe = html.escape(user.first_name or "کاربر")
 
+    user_is_admin = False
     try:
-        # Upsert user record
+        # Upsert user record and read authoritative DB role
+        initial_role = "ADMIN" if user.id in settings.SUPER_ADMIN_IDS else "USER"
         async with AsyncSessionLocal() as session:
             user_repo = UserRepository(session)
-            await user_repo.get_or_create(
+            db_user = await user_repo.get_or_create(
                 telegram_id=user.id,
                 first_name=user.first_name or "کاربر",
-                username=user.username
+                username=user.username,
+                role=initial_role
             )
+            user_is_admin = db_user.role == "ADMIN"
     except Exception as e:
         logger.error(f"Failed to upsert user {user.id} in DB: {e}")
 
@@ -45,7 +50,7 @@ async def handle_start(message: Message):
     )
 
     try:
-        await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user.id))
+        await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(user.id, is_admin=user_is_admin))
     except Exception as e:
         logger.error(f"Error sending start message with keyboard: {e}")
         # Fallback if keyboard still causes an error
@@ -98,7 +103,7 @@ async def handle_help_info(query: CallbackQuery):
 @router.callback_query(F.data == "btn_open_admin")
 async def handle_open_admin(query: CallbackQuery):
     user = query.from_user
-    if not user or user.id not in settings.SUPER_ADMIN_IDS:
+    if not user or not await is_db_admin(user.id):
         await query.answer("⛔ شما به پنل مدیریت دسترسی ندارید.", show_alert=True)
         return
 

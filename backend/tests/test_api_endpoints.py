@@ -248,3 +248,208 @@ async def test_admin_channel_template_and_publish_flow(monkeypatch):
 
         # Cleanup trade
         await ac.delete(f"/api/v1/trades/{trade_id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_db_admin_auth_bot_alerts_and_freemium_vip_limits(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from sqlalchemy import delete
+    from app.models.user import User
+    from app.models.trade import Trade
+    from app.models.alert import PriceAlert
+    from app.repositories.user_repo import UserRepository
+    from app.bot.filters import is_db_admin
+    from app.bot.keyboards import get_pair_selection_keyboard
+    from app.bot.handlers.user_alerts import start_alert_wizard, choose_pair_text, enter_target_price
+    from app.services.pair_service import PairService
+    from app.services import market_service
+    from app.core.security import AuthenticatedUser
+    from app.api.deps import get_current_user
+    import pandas as pd
+
+    idx = pd.date_range("2026-01-01", periods=10, freq="1h")
+    sample_df = pd.DataFrame(
+        {"open": [62000]*10, "high": [62100]*10, "low": [61900]*10, "close": [62050]*10, "volume": [100.0]*10},
+        index=idx,
+    )
+    monkeypatch.setattr(market_service.MarketService, "fetch_ohlcv_dataframe", AsyncMock(return_value=sample_df))
+
+    test_uid = 999888777  # Not in SUPER_ADMIN_IDS
+
+    # Clean test user before run
+    async with AsyncSessionLocal() as session:
+        await session.execute(delete(PriceAlert).where(PriceAlert.user_id == test_uid))
+        await session.execute(delete(Trade).where(Trade.user_id == test_uid))
+        await session.execute(delete(User).where(User.id == test_uid))
+        await session.commit()
+
+        user = await UserRepository(session).get_or_create(test_uid, "BotTester", "bot_tester", role="USER")
+        assert user.role == "USER"
+
+    # 1. Bot DB Admin Check: USER denied, DB-promoted ADMIN granted without .env SUPER_ADMIN_IDS
+    assert await is_db_admin(test_uid) is False
+    async with AsyncSessionLocal() as session:
+        u = await UserRepository(session).get_by_id(test_uid)
+        u.role = "ADMIN"
+        await session.commit()
+    assert await is_db_admin(test_uid) is True
+
+    # Reset back to USER for Freemium/VIP tests
+    async with AsyncSessionLocal() as session:
+        u = await UserRepository(session).get_by_id(test_uid)
+        u.role = "USER"
+        await session.commit()
+
+    # 2. Unified PairService + Pagination + Bot Alert FSM + Freemium Alert Limit
+    mock_pairs = [
+        {"symbol": f"COIN{i}USDT", "label": f"COIN{i} / USDT", "base": f"COIN{i}", "icon": "•", "color": "", "defaultPrice": "100.00", "step": 1.0, "change_pct": 1.5}
+        for i in range(15)
+    ]
+    monkeypatch.setattr(PairService, "get_active_pairs", AsyncMock(return_value=mock_pairs))
+    monkeypatch.setattr(
+        PairService,
+        "get_pair_ticker",
+        AsyncMock(return_value={"symbol": "COIN1USDT", "price": 100.0, "price_str": "100.00", "change_pct": 3.25}),
+    )
+
+    kb_page0 = get_pair_selection_keyboard(pairs=mock_pairs, page=0, page_size=10)
+    kb_page1 = get_pair_selection_keyboard(pairs=mock_pairs, page=1, page_size=10)
+    assert any(btn.callback_data == "alert_page_1" for row in kb_page0.inline_keyboard for btn in row)
+    assert any(btn.callback_data == "alert_page_0" for row in kb_page1.inline_keyboard for btn in row)
+
+    class DummyState:
+        def __init__(self):
+            self.state = None
+            self.data = {}
+        async def set_state(self, s):
+            self.state = s
+        async def update_data(self, **kw):
+            self.data.update(kw)
+        async def get_data(self):
+            return self.data
+        async def clear(self):
+            self.state = None
+
+    state = DummyState()
+    msg_answers = []
+
+    class DummyMsg:
+        def __init__(self, text=""):
+            self.text = text
+            self.from_user = SimpleNamespace(id=test_uid, first_name="BotTester", username="bot_tester")
+        async def answer(self, text, **kwargs):
+            msg_answers.append(text)
+
+    dummy_query = SimpleNamespace(
+        from_user=SimpleNamespace(id=test_uid, first_name="BotTester", username="bot_tester"),
+        message=DummyMsg(),
+        answer=AsyncMock(),
+    )
+
+    # Set free_max_alerts=1 dynamically to test limit cleanly
+    async with AsyncSessionLocal() as session:
+        await DynamicConfig.set(session, "free_max_alerts", 1, admin_id=111111111)
+
+    await start_alert_wizard(dummy_query, state)
+    assert state.state is not None
+    await choose_pair_text(DummyMsg("COIN1"), state)
+    assert "3.25%" in msg_answers[-1]
+    await enter_target_price(DummyMsg("120"), state)
+    assert state.state is None
+
+    # Second alert attempt as USER must be blocked before entering FSM
+    await start_alert_wizard(dummy_query, state)
+    assert state.state is None
+    assert "VIP" in msg_answers[-1]
+
+    # Promote to VIP -> can enter Alert FSM again
+    async with AsyncSessionLocal() as session:
+        u = await UserRepository(session).get_by_id(test_uid)
+        u.role = "VIP"
+        await session.commit()
+    await start_alert_wizard(dummy_query, state)
+    assert state.state is not None
+
+    # 3. Freemium / VIP Trade Limit Enforcement (POST /api/trades)
+    async with AsyncSessionLocal() as session:
+        u = await UserRepository(session).get_by_id(test_uid)
+        u.role = "USER"
+        await session.commit()
+        await DynamicConfig.set(session, "free_max_trades", 1, admin_id=111111111)
+
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        id=test_uid, first_name="BotTester", role="USER"
+    )
+    try:
+        headers = {"X-Telegram-Init-Data": "DEV_MOCK_USER"}
+        trade_payload = {
+            "pair": "BTC / USDT",
+            "base": "BTC",
+            "isLong": True,
+            "entryPrice": 62000,
+            "stopLoss": 61000,
+            "takeProfit": 64000,
+            "leverage": 10,
+            "balance": 1000,
+            "riskType": "%",
+            "riskValue": 2,
+        }
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            r1 = await ac.post("/api/trades", json=trade_payload, headers=headers)
+            assert r1.status_code == 201
+            # 2nd trade for USER at limit 1 -> HTTP 403
+            r2 = await ac.post("/api/trades", json=trade_payload, headers=headers)
+            assert r2.status_code == 403
+            assert "VIP" in r2.json()["detail"]
+
+            # Upgrade to VIP in DB -> succeeds
+            async with AsyncSessionLocal() as session:
+                u = await UserRepository(session).get_by_id(test_uid)
+                u.role = "VIP"
+                await session.commit()
+            r3 = await ac.post("/api/trades", json=trade_payload, headers=headers)
+            assert r3.status_code == 201
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        async with AsyncSessionLocal() as session:
+            await DynamicConfig.set(session, "free_max_trades", 15, admin_id=111111111)
+            await DynamicConfig.set(session, "free_max_alerts", 3, admin_id=111111111)
+            await session.execute(delete(PriceAlert).where(PriceAlert.user_id == test_uid))
+            await session.execute(delete(Trade).where(Trade.user_id == test_uid))
+            await session.execute(delete(User).where(User.id == test_uid))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_pair_service_unified_pairs(monkeypatch):
+    from app.services.pair_service import PairService
+    import httpx
+
+    PairService._cached_pairs = []
+    PairService._cache_ts = 0.0
+
+    fake_tickers = [
+        {"symbol": "ETHUSDT", "lastPrice": "3450.12", "quoteVolume": "500000000", "priceChangePercent": "2.4"},
+        {"symbol": "BTCUSDT", "lastPrice": "95000.50", "quoteVolume": "900000000", "priceChangePercent": "-1.1"},
+        {"symbol": "USDCUSDT", "lastPrice": "1.00", "quoteVolume": "800000000", "priceChangePercent": "0.0"},
+        {"symbol": "BTCUPUSDT", "lastPrice": "10.00", "quoteVolume": "200000000", "priceChangePercent": "3.0"},
+    ]
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return fake_tickers
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def get(self, url, **kwargs): return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    pairs = await PairService.get_active_pairs(force_refresh=True)
+    assert [p["symbol"] for p in pairs] == ["BTCUSDT", "ETHUSDT"]
+    assert pairs[0]["defaultPrice"] == "95000.50"
+    matched = await PairService.find_pair("eth")
+    assert matched is not None and matched["symbol"] == "ETHUSDT"

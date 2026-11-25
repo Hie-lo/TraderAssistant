@@ -8,6 +8,7 @@ from app.repositories.user_repo import UserRepository
 from app.repositories.strategy_repo import StrategyRepository
 from app.repositories.trade_repo import TradeRepository
 from app.services.trade_service import TradeService
+from app.services.pair_service import PairService
 from app.schemas.dashboard_schema import (
     BootstrapResponseSchema,
     UserProfileSchema,
@@ -84,3 +85,11 @@ async def get_initial_bootstrap(
         custom_strategies=custom_strategies_list,
         trades=formatted_trades
     )
+
+
+@router.get("/pairs")
+async def get_unified_active_pairs(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Returns the centralized active exchange pairs list shared with the Telegram bot."""
+    return await PairService.get_active_pairs()

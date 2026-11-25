@@ -26,6 +26,11 @@ class TradeRepository(BaseRepository[Trade]):
             return True
         return False
 
+    async def count_by_user(self, user_id: int) -> int:
+        stmt = select(func.count(Trade.id)).where(Trade.user_id == user_id)
+        res = await self.session.execute(stmt)
+        return int(res.scalar() or 0)
+
     async def list_by_user(self, user_id: int, limit: int = 200) -> List[Trade]:
         stmt = select(Trade).where(Trade.user_id == user_id).order_by(Trade.created_at.desc()).limit(limit)
         res = await self.session.execute(stmt)

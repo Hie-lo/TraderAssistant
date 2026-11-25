@@ -1,9 +1,11 @@
+from typing import List, Dict, Any, Optional
+import math
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 
 
-def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(user_id: int = 0, is_admin: bool = False) -> InlineKeyboardMarkup:
     """Main dashboard keyboard with WebApp launch button and quick utilities."""
     url = (settings.MINI_APP_URL or "").strip()
     buttons = []
@@ -42,8 +44,8 @@ def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="ℹ️ وضعیت سرور و راهنما", callback_data="btn_help_info")
     ])
 
-    # 5. Super Admin button
-    if user_id and user_id in settings.SUPER_ADMIN_IDS:
+    # 5. Admin button (driven by DB user.role == 'ADMIN')
+    if is_admin:
         buttons.append([
             InlineKeyboardButton(text="🛡️ پنل مدیریت ارشد", callback_data="btn_open_admin")
         ])
@@ -51,18 +53,46 @@ def get_main_menu_keyboard(user_id: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_pair_selection_keyboard() -> InlineKeyboardMarkup:
-    """Pair selection grid for setting alerts."""
-    pairs = DynamicConfig.get("supported_pairs", [])
+def get_pair_selection_keyboard(
+    pairs: Optional[List[Dict[str, Any]]] = None,
+    page: int = 0,
+    page_size: int = 10
+) -> InlineKeyboardMarkup:
+    """Paginated pair selection grid using the unified active pairs list."""
+    pair_list = pairs if pairs is not None else DynamicConfig.get("supported_pairs", [])
+    total = len(pair_list)
+    total_pages = max(1, math.ceil(total / page_size))
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * page_size
+    page_items = pair_list[start : start + page_size]
+
     buttons = []
     row = []
-    for p in pairs:
-        row.append(InlineKeyboardButton(text=f"{p['icon']} {p['label']}", callback_data=f"pair_{p['symbol']}"))
+    for p in page_items:
+        base = p.get("base") or p["symbol"].replace("USDT", "")
+        icon = p.get("icon", "•")
+        row.append(
+            InlineKeyboardButton(
+                text=f"{icon} {base}/USDT",
+                callback_data=f"pair_{p['symbol']}"
+            )
+        )
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
+
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"alert_page_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"صفحه {page + 1}/{total_pages}", callback_data="noop_page"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"alert_page_{page + 1}"))
+        buttons.append(nav_row)
+
     buttons.append([InlineKeyboardButton(text="❌ انصراف", callback_data="cancel_fsm")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

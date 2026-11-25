@@ -8,6 +8,7 @@ from app.core.dynamic_config import DynamicConfig
 from app.core.exceptions import BusinessValidationError
 from app.models.alert import PriceAlert
 from app.repositories.alert_repo import AlertRepository
+from app.repositories.user_repo import UserRepository
 from app.services.market_service import MarketService
 from app.core.logger import logger
 
@@ -28,13 +29,16 @@ class AlertService:
     ) -> PriceAlert:
         alert_repo = AlertRepository(session)
 
-        # Check active alerts limit
-        max_alerts = DynamicConfig.get("max_active_alerts_free", 5)
-        active_count = await alert_repo.count_active_by_user(user_id)
-        if active_count >= max_alerts:
-            raise BusinessValidationError(
-                f"شما به سقف مجاز هشدارهای فعال ({max_alerts} هشدار) رسیده‌اید. لطفاً هشدارهای قبلی را مدیریت کنید."
-            )
+        # Check Freemium / VIP active alerts limit (DB user.role as single source of truth)
+        db_user = await UserRepository(session).get_by_id(user_id)
+        if not db_user or db_user.role == "USER":
+            max_alerts = int(DynamicConfig.get("free_max_alerts", 3))
+            active_count = await alert_repo.count_active_by_user(user_id)
+            if active_count >= max_alerts:
+                raise BusinessValidationError(
+                    f"کاربران رایگان حداکثر مجاز به ثبت {max_alerts} هشدار هم‌زمان هستند. "
+                    f"برای ثبت هشدارهای بیشتر حساب خود را به VIP ارتقا دهید یا هشدارهای قبلی را حذف کنید."
+                )
 
         norm_symbol = symbol.replace(" / ", "").replace("/", "").upper()
         if "USDT" not in norm_symbol:

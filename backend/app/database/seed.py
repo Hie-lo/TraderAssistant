@@ -79,6 +79,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "max_leverage": 2000,
     "default_weekly_drawdown_pct": 5.0,
     "max_active_alerts_free": 5,
+    "free_max_trades": 15,
+    "free_max_alerts": 3,
     "max_chart_upload_mb": 2.0,
     "api_rate_limit_per_min": 60,
     "heavy_rate_limit_per_min": 6,

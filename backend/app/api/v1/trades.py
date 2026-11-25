@@ -1,15 +1,17 @@
 import asyncio
 from typing import Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.api.deps import get_db, get_current_user, check_heavy_limit, require_admin
 from app.core.security import AuthenticatedUser
+from app.core.dynamic_config import DynamicConfig
 from app.database.session import AsyncSessionLocal
 from app.models.trade import Trade
 from app.repositories.trade_repo import TradeRepository
+from app.repositories.user_repo import UserRepository
 from app.schemas.trade_schema import TradeCreateSchema, TradeUpdateSchema, TradeResponseSchema
 from app.schemas.common import ApiResponse
 from app.services.trade_service import TradeService
@@ -66,7 +68,22 @@ async def create_new_trade(
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Creates a new trade journal entry and launches background candlestick snapshot generation."""
+    """Creates a new trade journal entry after checking Freemium/VIP limits."""
+    # Check Freemium / VIP trade limit (DB user.role is single source of truth)
+    db_user = await UserRepository(db).get_by_id(current_user.id)
+    effective_role = db_user.role if db_user else current_user.role
+    if effective_role == "USER":
+        free_max_trades = int(DynamicConfig.get("free_max_trades", 15))
+        total_trades = await TradeRepository(db).count_by_user(current_user.id)
+        if total_trades >= free_max_trades:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"سقف مجاز ثبت معامله برای کاربران رایگان ({free_max_trades} معامله) به پایان رسیده است. "
+                    f"برای ثبت نامحد معاملات، حساب خود را به VIP ارتقا دهید."
+                )
+            )
+
     trade, _ = await TradeService.create_trade(db, current_user.id, trade_in)
 
     # Schedule background chart generation

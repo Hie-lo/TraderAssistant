@@ -50,12 +50,20 @@ async def get_current_user(
 
 
 async def require_admin(
-    user: AuthenticatedUser = Depends(get_current_user)
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ) -> AuthenticatedUser:
-    """Enforces that the current authenticated user has administrative privileges."""
-    if user.role != "ADMIN" and user.id not in settings.SUPER_ADMIN_IDS:
-        raise AuthorizationError("دسترسی به بخش مدیریت فقط برای ادمین‌های سیستم مجاز است.")
-    return user
+    """Enforces that the current authenticated user has administrative privileges (DB role as source of truth)."""
+    if user.role == "ADMIN" or user.id in settings.SUPER_ADMIN_IDS:
+        return user
+
+    from app.repositories.user_repo import UserRepository
+    db_user = await UserRepository(db).get_by_id(user.id)
+    if db_user and db_user.role == "ADMIN":
+        user.role = "ADMIN"
+        return user
+
+    raise AuthorizationError("دسترسی به بخش مدیریت فقط برای ادمین‌های سیستم مجاز است.")
 
 
 def check_heavy_limit(user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:

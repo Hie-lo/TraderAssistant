@@ -334,18 +334,28 @@ const App = () => {
       setPairsLoading(true);
       const endpoints = [
         'https://api.binance.com/api/v3/ticker/24hr',
-        'https://data-api.binance.vision/api/v3/ticker/24hr'
+        'https://data-api.binance.vision/api/v3/ticker/24hr',
+        '/api/v1/pairs'
       ];
 
       for (const url of endpoints) {
         try {
-          const res = await fetch(url, { signal: controller.signal });
+          const isBackendFallback = url.startsWith('/api/');
+          const fetchHeaders = isBackendFallback
+            ? { 'X-Telegram-Init-Data': window.Telegram?.WebApp?.initData || 'DEV_MOCK_USER' }
+            : undefined;
+          const res = await fetch(url, { signal: controller.signal, headers: fetchHeaders });
           if (!res.ok) continue;
           const tickers = await res.json();
           if (!Array.isArray(tickers) || isCancelled) return;
 
           const excludedRegex = /^(USDC|FDUSD|TUSD|USDP|BUSD|DAI|EUR|GBP|AUD|TRY|BRL|ARS|PAXG|AEUR|USDE|EURI)USDT$|.*(UP|DOWN|BULL|BEAR)USDT$/i;
-          const activeUsdtPairs = tickers
+          const activeUsdtPairs = isBackendFallback
+            ? tickers.map((p) => {
+                marketPricesRef.current[p.symbol] = p.defaultPrice;
+                return p;
+              })
+            : tickers
             .filter((t) => {
               if (!t?.symbol || !t.symbol.endsWith('USDT')) return false;
               if (excludedRegex.test(t.symbol)) return false;
