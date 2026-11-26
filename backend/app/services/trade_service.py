@@ -12,6 +12,7 @@ from app.repositories.user_repo import UserRepository
 from app.services.calculator_service import CalculatorService
 from app.services.chart_service import ChartService
 from app.core.exceptions import NotFoundError, BusinessValidationError
+from app.core.formatters import format_crypto_price
 from app.core.logger import logger
 
 
@@ -32,9 +33,9 @@ class TradeService:
     @classmethod
     def trade_to_response(cls, trade: Trade) -> TradeResponseSchema:
         """Serializes Trade ORM model to TradeResponseSchema for React Mini-App."""
-        sl_str = f"{trade.stop_loss:f}".rstrip("0").rstrip(".") if trade.stop_loss else "—"
-        tp_str = f"{trade.take_profit:f}".rstrip("0").rstrip(".") if trade.take_profit else "—"
-        entry_str = f"{trade.entry_price:f}".rstrip("0").rstrip(".")
+        sl_str = format_crypto_price(trade.stop_loss) if trade.stop_loss else "—"
+        tp_str = format_crypto_price(trade.take_profit) if trade.take_profit else "—"
+        entry_str = format_crypto_price(trade.entry_price)
         size_str = f"{trade.position_size:.4f}"
         margin_str = f"{trade.required_margin:.2f}"
         risk_str = f"{trade.risk_amount:.2f}"

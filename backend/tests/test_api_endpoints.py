@@ -696,3 +696,146 @@ async def test_idor_protection_on_alerts_and_trades(monkeypatch):
             await session.execute(delete(Trade).where(Trade.user_id.in_([owner_id, attacker_id])))
             await session.execute(delete(User).where(User.id.in_([owner_id, attacker_id])))
             await session.commit()
+
+
+def test_format_crypto_price_and_channel_url_parsing():
+    """Verify smart crypto price formatting and Telegram t.me URL normalization."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from app.core.exceptions import BusinessValidationError
+    from app.core.formatters import format_crypto_price
+    from app.services.channel_service import ChannelService
+
+    assert format_crypto_price(60000.9200000) == "60000.92"
+    assert format_crypto_price(Decimal("60000.00000000")) == "60000"
+    assert format_crypto_price(1.23456) == "1.2346"
+    assert format_crypto_price(0.00002000) == "0.00002"
+    assert format_crypto_price(2e-05) == "0.00002"
+    assert format_crypto_price(1e-08) == "0.00000001"
+    assert format_crypto_price(0.0) == "0"
+    assert format_crypto_price(None) == "—"
+
+    assert ChannelService.parse_channel_identifier("https://t.me/To_Be_complete") == "@To_Be_complete"
+    assert ChannelService.parse_channel_identifier("t.me/To_Be_complete/") == "@To_Be_complete"
+    assert ChannelService.parse_channel_identifier("http://t.me/To_Be_complete?single") == "@To_Be_complete"
+    assert ChannelService.parse_channel_identifier("@To_Be_complete") == "@To_Be_complete"
+    assert ChannelService.parse_channel_identifier("To_Be_complete") == "@To_Be_complete"
+    assert ChannelService.parse_channel_identifier("-1001987654321") == -1001987654321
+    with pytest.raises(BusinessValidationError):
+        ChannelService.parse_channel_identifier("https://t.me/+privateInvite123")
+
+    mock_trade = SimpleNamespace(
+        id="tr-fmt-1",
+        pair="PEPE / USDT",
+        symbol="PEPEUSDT",
+        base_asset="PEPE",
+        is_long=True,
+        entry_price=Decimal("0.00002000"),
+        stop_loss=Decimal("0.00001800"),
+        take_profit=Decimal("0.00002500"),
+        position_size=Decimal("1000000"),
+        required_margin=Decimal("2.00"),
+        leverage=10,
+        risk_amount=Decimal("2.00"),
+        potential_profit=Decimal("5.00"),
+        rr_ratio=Decimal("2.50"),
+        status="OPEN",
+        realized_pnl=Decimal("0.00"),
+        strategy_name="Breakout",
+        entry_reason="",
+        notes="",
+        created_at=datetime.now(timezone.utc),
+        has_chart_snapshot=True,
+        chart_timeframe="15m",
+        chart_image_url=None,
+        is_custom_chart=False,
+        telegram_message_id=None,
+    )
+    rendered = ChannelService.render_caption(
+        mock_trade,
+        template_str="E={{ entry_price }}|SL={{ sl }}|TP={{ tp }}",
+    )
+    assert rendered == "E=0.00002|SL=0.000018|TP=0.000025"
+
+
+@pytest.mark.asyncio
+async def test_initial_chart_uses_same_unified_addplot_renderer(monkeypatch):
+    """Verify initial POST /api/v1/trades and regenerate-chart both render Entry/SL/TP lines via unified pipeline."""
+    from unittest.mock import AsyncMock
+    import pandas as pd
+    from sqlalchemy import delete
+    from app.api.deps import get_current_user
+    from app.core.security import AuthenticatedUser
+    from app.models.trade import Trade
+    from app.models.user import User
+    from app.repositories.user_repo import UserRepository
+    from app.services.chart_service import ChartService
+    from app.services.market_service import MarketService
+
+    uid = 555099
+    idx = pd.date_range("2026-01-01", periods=20, freq="15min")
+    sample_df = pd.DataFrame(
+        {"open": [60000.0] * 20, "high": [60150.0] * 20, "low": [59850.0] * 20, "close": [60050.0] * 20, "volume": [100.0] * 20},
+        index=idx,
+    )
+    monkeypatch.setattr(MarketService, "fetch_ohlcv_dataframe", AsyncMock(return_value=sample_df))
+
+    render_calls = []
+    orig_render = ChartService._render_mplfinance_bytes_sync
+
+    def spy_render(df, entry, sl, tp, symbol, timeframe):
+        render_calls.append((float(entry), float(sl) if sl else None, float(tp) if tp else None, timeframe))
+        return orig_render(df, entry, sl, tp, symbol, timeframe)
+
+    monkeypatch.setattr(ChartService, "_render_mplfinance_bytes_sync", spy_render)
+
+    async with AsyncSessionLocal() as session:
+        await UserRepository(session).get_or_create(telegram_id=uid, first_name="ChartTester", role="VIP")
+
+    headers = {"X-Telegram-Init-Data": "DEV_MOCK_USER"}
+    trade_id = None
+    try:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+            id=uid, first_name="ChartTester", role="VIP"
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/v1/trades",
+                json={
+                    "pair": "BTC / USDT",
+                    "base": "BTC",
+                    "isLong": True,
+                    "entryPrice": "60000.9200000",
+                    "stopLoss": "59700.00",
+                    "takeProfit": "60500.50",
+                    "leverage": 10,
+                    "balance": 1000,
+                    "riskType": "%",
+                    "riskValue": 2,
+                },
+                headers=headers,
+            )
+            assert res.status_code == 201
+            trade_id = res.json()["id"]
+            assert res.json()["entryPrice"] == "60000.92"
+
+            # Wait briefly? ASGITransport runs FastAPI BackgroundTasks before response finishes.
+            assert len(render_calls) == 1
+
+            regen = await ac.post(
+                f"/api/v1/trades/{trade_id}/regenerate-chart",
+                json={"timeframe": "15m"},
+                headers=headers,
+            )
+            assert regen.status_code == 200
+            assert len(render_calls) == 2
+            assert render_calls[0] == render_calls[1] == (60000.92, 59700.0, 60500.5, "15m")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        if trade_id:
+            ChartService.remove_chart_file(f"/static/charts_auto/{trade_id}_15m.png")
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(Trade).where(Trade.user_id == uid))
+            await session.execute(delete(User).where(User.id == uid))
+            await session.commit()

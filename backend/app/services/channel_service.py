@@ -10,12 +10,12 @@ from app.bot.loader import bot
 from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 from app.core.exceptions import AppException, BusinessValidationError
+from app.core.formatters import format_crypto_price
 from app.core.logger import logger
 from app.database.seed import DEFAULT_SETTINGS
 from app.models.trade import Trade
 from app.repositories.trade_repo import TradeRepository
 from app.services.chart_service import ChartService, AUTO_CHARTS_DIR, CUSTOM_CHARTS_DIR
-from app.services.market_service import MarketService
 from app.services.trade_service import TradeService
 
 _jinja_env = Environment(autoescape=False)
@@ -35,21 +35,44 @@ class ChannelService:
             raise BusinessValidationError(f"خطای سینتکس Jinja2 در خط {exc.lineno}: {exc.message}")
 
     @staticmethod
-    def resolve_channel_id() -> Union[int, str]:
+    def parse_channel_identifier(raw: Any) -> Union[int, str]:
+        """Normalizes a numeric ID, @username, or https://t.me/... URL for Telegram Bot API."""
+        val = str(raw).strip() if raw is not None else ""
+        if not val or val == "-1001234567890":
+            raise BusinessValidationError("شناسه کانال انتشار (CHANNEL_ID) در تنظیمات یا .env مشخص نشده است.")
+
+        lowered = val.lower()
+        for prefix in (
+            "https://t.me/",
+            "http://t.me/",
+            "t.me/",
+            "https://telegram.me/",
+            "http://telegram.me/",
+            "telegram.me/",
+        ):
+            if lowered.startswith(prefix):
+                username = val[len(prefix):].split("?")[0].strip().strip("/").split("/")[0].lstrip("@")
+                if not username or username.startswith("+") or username.lower() == "joinchat":
+                    raise BusinessValidationError(
+                        "لینک کانال نامعتبر است؛ از @username کانال عمومی یا شناسه عددی (-100...) استفاده کنید."
+                    )
+                return f"@{username}"
+
+        # Numeric IDs (including negative -100...) must be passed as int to Aiogram
+        if val.lstrip("-").isdigit():
+            return int(val)
+
+        return val if val.startswith("@") else f"@{val}"
+
+    @classmethod
+    def resolve_channel_id(cls) -> Union[int, str]:
         raw = DynamicConfig.get("channel_id")
         if raw is None or str(raw).strip() == "":
             raw = settings.CHANNEL_ID
         if raw is None or str(raw).strip() == "":
             raw = settings.ADMIN_LOG_CHANNEL_ID
 
-        val = str(raw).strip() if raw is not None else ""
-        if not val or val == "-1001234567890":
-            raise BusinessValidationError("شناسه کانال انتشار (CHANNEL_ID) در تنظیمات یا .env مشخص نشده است.")
-
-        # Numeric IDs (including negative -100...) must be passed as int to Aiogram
-        if val.lstrip("-").isdigit():
-            return int(val)
-        return val
+        return cls.parse_channel_identifier(raw)
 
     @classmethod
     def render_caption(cls, trade: Trade, template_str: Optional[str] = None) -> str:
@@ -59,6 +82,10 @@ class ChannelService:
             or DEFAULT_SETTINGS["channel_post_template"]
         )
         dto = TradeService.trade_to_response(trade)
+        entry_fmt = format_crypto_price(trade.entry_price)
+        sl_fmt = format_crypto_price(trade.stop_loss) if trade.stop_loss else "—"
+        tp_fmt = format_crypto_price(trade.take_profit) if trade.take_profit else "—"
+
         context: Dict[str, Any] = {
             "pair": html.escape(dto.pair),
             "symbol": html.escape(trade.symbol),
@@ -66,12 +93,12 @@ class ChannelService:
             "direction": "LONG ▲" if dto.is_long else "SHORT ▼",
             "side": "LONG" if dto.is_long else "SHORT",
             "is_long": dto.is_long,
-            "entry": dto.entry_price,
-            "entry_price": dto.entry_price,
-            "sl": dto.stop_loss,
-            "stop_loss": dto.stop_loss,
-            "tp": dto.take_profit,
-            "take_profit": dto.take_profit,
+            "entry": entry_fmt,
+            "entry_price": entry_fmt,
+            "sl": sl_fmt,
+            "stop_loss": sl_fmt,
+            "tp": tp_fmt,
+            "take_profit": tp_fmt,
             "size": dto.size,
             "margin": dto.margin,
             "leverage": dto.leverage,
@@ -120,12 +147,6 @@ class ChannelService:
 
         if not image_path:
             timeframe = trade.chart_timeframe or "15m"
-            df = await MarketService.fetch_ohlcv_dataframe(
-                symbol=trade.symbol,
-                timeframe=timeframe,
-                limit=80,
-                center_price=float(trade.entry_price)
-            )
             chart_url = await ChartService.generate_trade_chart(
                 trade_id=str(trade.id),
                 symbol=trade.symbol,
@@ -133,7 +154,6 @@ class ChannelService:
                 entry=float(trade.entry_price),
                 sl=float(trade.stop_loss) if trade.stop_loss else None,
                 tp=float(trade.take_profit) if trade.take_profit else None,
-                df=df
             )
             image_path = cls._resolve_local_chart_path(chart_url)
             fields_to_save["chart_image_url"] = chart_url

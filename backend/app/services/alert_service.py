@@ -6,6 +6,7 @@ import httpx
 from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 from app.core.exceptions import BusinessValidationError
+from app.core.formatters import format_crypto_price
 from app.models.alert import PriceAlert
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.user_repo import UserRepository
@@ -126,16 +127,20 @@ class AlertService:
             return False
 
         arrow = "🟢 صعودی 📈" if alert.direction == "UP" else "🔴 نزولی 📉"
-        type_str = f"{alert.target_value}%" if alert.alert_type == "PERCENT" else f"${alert.target_value}"
+        target_fmt = format_crypto_price(alert.target_value)
+        type_str = f"{target_fmt}%" if alert.alert_type == "PERCENT" else f"${target_fmt}"
+        base_fmt = format_crypto_price(alert.base_price)
+        trigger_fmt = format_crypto_price(alert.trigger_price)
+        current_fmt = format_crypto_price(current_price)
 
         text = (
             f"🔔 <b>هشدار هوشمند بازار فعال شد!</b>\n\n"
             f"نماد: <b>{alert.symbol}</b>\n"
             f"جهت حرکت: {arrow}\n"
-            f"قیمت مبدا در زمان ثبت: <code>${alert.base_price}</code>\n"
+            f"قیمت مبدا در زمان ثبت: <code>${base_fmt}</code>\n"
             f"هدف تعیین شده: <b>{type_str}</b>\n"
-            f"قیمت تریگر محاسبه شده: <code>${alert.trigger_price}</code>\n"
-            f"قیمت فعلی بازار: <b>${current_price}</b>\n\n"
+            f"قیمت تریگر محاسبه شده: <code>${trigger_fmt}</code>\n"
+            f"قیمت فعلی بازار: <b>${current_fmt}</b>\n\n"
             f"💡 <i>جهت مدیریت پوزیشن یا بررسی ورود، مینی‌اپ را بررسی فرمایید.</i>"
         )
 

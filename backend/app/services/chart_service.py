@@ -16,6 +16,7 @@ from PIL import Image
 from app.core.config import settings
 from app.core.dynamic_config import DynamicConfig
 from app.core.exceptions import BusinessValidationError
+from app.core.formatters import format_crypto_price
 from app.core.logger import logger
 
 # Ensure storage directories exist
@@ -60,30 +61,34 @@ class ChartService:
                 rc={"font.size": 8, "axes.labelsize": 8}
             )
 
+            entry_val = float(entry)
+            sl_val = float(sl) if sl is not None and float(sl) > 0 else None
+            tp_val = float(tp) if tp is not None and float(tp) > 0 else None
+
             # Strictly use mpf.make_addplot for exact horizontal Entry / SL / TP lines across the chart
             addplots = [
                 mpf.make_addplot(
-                    pd.Series([entry] * len(df), index=df.index),
+                    pd.Series([entry_val] * len(df), index=df.index),
                     color="#3b82f6",
                     linestyle="-",
                     width=1.4,
                     secondary_y=False,
                 )
             ]
-            if sl and sl > 0:
+            if sl_val is not None:
                 addplots.append(
                     mpf.make_addplot(
-                        pd.Series([sl] * len(df), index=df.index),
+                        pd.Series([sl_val] * len(df), index=df.index),
                         color="#ef4444",
                         linestyle="--",
                         width=1.3,
                         secondary_y=False,
                     )
                 )
-            if tp and tp > 0:
+            if tp_val is not None:
                 addplots.append(
                     mpf.make_addplot(
-                        pd.Series([tp] * len(df), index=df.index),
+                        pd.Series([tp_val] * len(df), index=df.index),
                         color="#22c55e",
                         linestyle="--",
                         width=1.3,
@@ -104,12 +109,12 @@ class ChartService:
             )
 
             ax = axlist[0]
-            ax.axhline(y=entry, color="#3b82f6", linewidth=0.4, alpha=0.0)  # keeps axis scaled
-            legend_parts = [f"Entry: {entry:g}"]
-            if sl and sl > 0:
-                legend_parts.append(f"SL: {sl:g}")
-            if tp and tp > 0:
-                legend_parts.append(f"TP: {tp:g}")
+            ax.axhline(y=entry_val, color="#3b82f6", linewidth=0.4, alpha=0.0)  # keeps axis scaled
+            legend_parts = [f"Entry: {format_crypto_price(entry_val)}"]
+            if sl_val is not None:
+                legend_parts.append(f"SL: {format_crypto_price(sl_val)}")
+            if tp_val is not None:
+                legend_parts.append(f"TP: {format_crypto_price(tp_val)}")
             ax.set_xlabel("  |  ".join(legend_parts), color="#94a3b8", fontsize=8)
 
             buf = io.BytesIO()
@@ -149,9 +154,21 @@ class ChartService:
         entry: float,
         sl: Optional[float],
         tp: Optional[float],
-        df: pd.DataFrame
+        df: Optional[pd.DataFrame] = None
     ) -> str:
-        """Renders mplfinance chart in memory via BytesIO and persists to disk only for saved trades."""
+        """Unified chart generator (initial create, regenerate, publish): fetches OHLCV if omitted and renders Entry/SL/TP addplots."""
+        if df is None:
+            from app.services.market_service import MarketService
+
+            df = await MarketService.fetch_ohlcv_dataframe(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=80,
+                center_price=float(entry)
+            )
+        if df is None or df.empty:
+            raise BusinessValidationError("داده‌های کندل برای رسم چارت در دسترس نیست.")
+
         png_bytes = await cls.render_chart_bytes(
             symbol=symbol,
             timeframe=timeframe,

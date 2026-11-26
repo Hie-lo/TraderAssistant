@@ -17,7 +17,6 @@ from app.schemas.common import ApiResponse
 from app.services.trade_service import TradeService
 from app.services.chart_service import ChartService
 from app.services.channel_service import ChannelService
-from app.services.market_service import MarketService
 from app.services.risk_guard_service import RiskGuardService
 from app.core.exceptions import AppException, NotFoundError, BusinessValidationError
 from app.core.logger import logger
@@ -38,12 +37,6 @@ async def generate_and_attach_chart_task(
     Zero-Defect Rule: Opens an independent AsyncSessionLocal session for the background task.
     """
     try:
-        df = await MarketService.fetch_ohlcv_dataframe(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=80,
-            center_price=entry
-        )
         chart_url = await ChartService.generate_trade_chart(
             trade_id=trade_id,
             symbol=symbol,
@@ -51,7 +44,6 @@ async def generate_and_attach_chart_task(
             entry=entry,
             sl=sl,
             tp=tp,
-            df=df
         )
 
         async with AsyncSessionLocal() as bg_session:
@@ -198,12 +190,6 @@ async def regenerate_trade_chart(
     if not trade:
         raise NotFoundError("معامله مورد نظر یافت نشد.")
 
-    df = await MarketService.fetch_ohlcv_dataframe(
-        symbol=trade.symbol,
-        timeframe=timeframe,
-        limit=80,
-        center_price=float(trade.entry_price)
-    )
     chart_url = await ChartService.generate_trade_chart(
         trade_id=str(trade.id),
         symbol=trade.symbol,
@@ -211,7 +197,6 @@ async def regenerate_trade_chart(
         entry=float(trade.entry_price),
         sl=float(trade.stop_loss) if trade.stop_loss else None,
         tp=float(trade.take_profit) if trade.take_profit else None,
-        df=df,
     )
     if trade.chart_image_url and trade.chart_image_url != chart_url:
         ChartService.remove_chart_file(trade.chart_image_url)
