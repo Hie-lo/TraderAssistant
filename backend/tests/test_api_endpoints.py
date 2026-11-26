@@ -819,8 +819,8 @@ async def test_initial_chart_uses_same_unified_addplot_renderer(monkeypatch):
             assert res.status_code == 201
             trade_id = res.json()["id"]
             assert res.json()["entryPrice"] == "60000.92"
-
-            # Wait briefly? ASGITransport runs FastAPI BackgroundTasks before response finishes.
+            assert res.json()["chartTimeframe"] == "15m"
+            assert res.json()["customChartUrl"] == f"/static/charts_auto/{trade_id}_15m.png"
             assert len(render_calls) == 1
 
             regen = await ac.post(
@@ -838,4 +838,87 @@ async def test_initial_chart_uses_same_unified_addplot_renderer(monkeypatch):
         async with AsyncSessionLocal() as session:
             await session.execute(delete(Trade).where(Trade.user_id == uid))
             await session.execute(delete(User).where(User.id == uid))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_superchart_klines_vip_gating_and_failsafe_503(monkeypatch):
+    """Verify /api/v1/market/klines rejects USER and expired VIP with 403, and returns 503 + admin alert on exchange errors."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock
+    from sqlalchemy import delete
+    from app.api.deps import get_current_user
+    from app.api.v1 import market as market_router_mod
+    from app.core.security import AuthenticatedUser
+    from app.models.user import User
+    from app.repositories.user_repo import UserRepository
+    from app.services.market_service import MarketService
+
+    uid_user = 555201
+    uid_vip = 555202
+
+    async with AsyncSessionLocal() as session:
+        repo = UserRepository(session)
+        await repo.get_or_create(telegram_id=uid_user, first_name="FreeUser", role="USER")
+        vip = await repo.get_or_create(telegram_id=uid_vip, first_name="VipUser", role="VIP")
+        await repo.update_vip_subscription(
+            vip, role="VIP", subscription_end_date=datetime.now(timezone.utc) + timedelta(days=10)
+        )
+
+    headers = {"X-Telegram-Init-Data": "DEV_MOCK_USER"}
+    alert_calls = []
+
+    async def fake_notify(err_details: str, symbol: str, timeframe: str):
+        alert_calls.append((err_details, symbol, timeframe))
+
+    monkeypatch.setattr(market_router_mod, "_notify_admin_exchange_error", fake_notify)
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            # 1. Free USER blocked -> 403
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+                id=uid_user, first_name="FreeUser", role="USER"
+            )
+            r_free = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m", headers=headers)
+            assert r_free.status_code == 403
+
+            # 2. Active VIP succeeds -> 200
+            sample_bars = [
+                {"timestamp": 1700000000000 + i * 900000, "open": 60000.0, "high": 60100.0, "low": 59900.0, "close": 60050.0, "volume": 12.5}
+                for i in range(25)
+            ]
+            monkeypatch.setattr(MarketService, "fetch_live_ohlcv_strict", AsyncMock(return_value=sample_bars))
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+                id=uid_vip, first_name="VipUser", role="USER"
+            )
+            r_vip = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m", headers=headers)
+            assert r_vip.status_code == 200
+            assert len(r_vip.json()["bars"]) == 25
+
+            # 3. Exchange failure -> async admin alert + 503
+            monkeypatch.setattr(
+                MarketService,
+                "fetch_live_ohlcv_strict",
+                AsyncMock(side_effect=TimeoutError("Binance timeout")),
+            )
+            r_err = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m", headers=headers)
+            assert r_err.status_code == 503
+            await asyncio.sleep(0)
+            assert len(alert_calls) == 1
+            assert "Binance timeout" in alert_calls[0][0]
+
+            # 4. Expired VIP blocked -> 403
+            async with AsyncSessionLocal() as session:
+                repo = UserRepository(session)
+                vip_row = await repo.get_by_id(uid_vip)
+                await repo.update_vip_subscription(
+                    vip_row, role="VIP", subscription_end_date=datetime.now(timezone.utc) - timedelta(minutes=5)
+                )
+            r_exp = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m", headers=headers)
+            assert r_exp.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(User).where(User.id.in_([uid_user, uid_vip])))
             await session.commit()

@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 import asyncio
 from datetime import datetime
+import httpx
 import pandas as pd
 import ccxt.async_support as ccxt_async
 from app.core.logger import logger
@@ -16,7 +17,7 @@ class MarketService:
         if cls._exchange is None:
             cls._exchange = ccxt_async.binance({
                 "enableRateLimit": True,
-                "timeout": 8000,
+                "timeout": 12000,
                 "options": {
                     "defaultType": "future"
                 }
@@ -36,6 +37,81 @@ class MarketService:
                 cls._exchange = None
 
     @classmethod
+    async def _fetch_raw_exchange_klines(
+        cls,
+        symbol: str,
+        timeframe: str = "15m",
+        limit: int = 80,
+    ) -> List[List[float]]:
+        """Fetches raw OHLCV candles from Binance via CCXT with public REST klines fallback."""
+        exchange = cls.get_exchange()
+        norm_symbol = symbol.replace(" / ", "").replace("/", "").upper()
+        if not norm_symbol.endswith("USDT"):
+            norm_symbol += "USDT"
+        pair_key = f"{norm_symbol[:-4]}/{norm_symbol[-4:]}"
+        tf_ccxt = (timeframe or "15m").lower()
+
+        raw_candles = None
+        last_error: Optional[Exception] = None
+        try:
+            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=tf_ccxt, limit=limit)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"CCXT fetch_ohlcv failed for {symbol} ({tf_ccxt}): {e}. Trying Binance REST klines.")
+
+        if not raw_candles:
+            kline_urls = (
+                "https://fapi.binance.com/fapi/v1/klines",
+                "https://api.binance.com/api/v3/klines",
+                "https://data-api.binance.vision/api/v3/klines",
+            )
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                for url in kline_urls:
+                    try:
+                        resp = await client.get(
+                            url,
+                            params={"symbol": norm_symbol, "interval": tf_ccxt, "limit": limit},
+                        )
+                        if resp.status_code == 200:
+                            rows = resp.json()
+                            if isinstance(rows, list) and rows:
+                                raw_candles = [
+                                    [int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])]
+                                    for k in rows
+                                ]
+                                break
+                        else:
+                            last_error = RuntimeError(f"HTTP {resp.status_code} from {url}")
+                    except Exception as rest_err:
+                        last_error = rest_err
+                        logger.debug(f"REST klines fallback failed ({url}) for {norm_symbol}: {rest_err}")
+
+        if not raw_candles:
+            raise RuntimeError(str(last_error) if last_error else f"Empty OHLCV payload for {norm_symbol}")
+        return raw_candles
+
+    @classmethod
+    async def fetch_live_ohlcv_strict(
+        cls,
+        symbol: str,
+        timeframe: str = "15m",
+        limit: int = 200,
+    ) -> List[Dict[str, float]]:
+        """Strictly fetches live OHLCV bars for Superchart; raises on exchange failure without fake candles."""
+        raw_candles = await cls._fetch_raw_exchange_klines(symbol=symbol, timeframe=timeframe, limit=limit)
+        return [
+            {
+                "timestamp": int(c[0]),
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4]),
+                "volume": float(c[5]),
+            }
+            for c in raw_candles
+        ]
+
+    @classmethod
     async def fetch_ohlcv_dataframe(
         cls,
         symbol: str,
@@ -44,16 +120,11 @@ class MarketService:
         center_price: Optional[float] = None
     ) -> pd.DataFrame:
         """Fetches OHLCV candles from Binance and returns a formatted pandas DataFrame."""
-        exchange = cls.get_exchange()
-        # Clean symbol format e.g. BTCUSDT -> BTC/USDT and lowercase timeframe (1H -> 1h)
-        norm_symbol = symbol.replace(" / ", "").replace("/", "").upper()
-        pair_key = f"{norm_symbol[:-4]}/{norm_symbol[-4:]}"
         tf_ccxt = (timeframe or "15m").lower()
-
         try:
-            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=tf_ccxt, limit=limit)
+            raw_candles = await cls._fetch_raw_exchange_klines(symbol=symbol, timeframe=tf_ccxt, limit=limit)
         except Exception as e:
-            logger.warning(f"CCXT fetch_ohlcv failed for {symbol}: {e}. Generating fallback candles.")
+            logger.warning(f"All exchange OHLCV sources failed for {symbol} ({tf_ccxt}): {e}. Generating fallback candles.")
             now_ms = int(datetime.now().timestamp() * 1000)
             tf_ms_map = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
             step_ms = tf_ms_map.get(tf_ccxt, 900_000)

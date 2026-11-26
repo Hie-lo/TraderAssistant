@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends, BackgroundTasks, UploadFile, File, HTTPException, Body
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -17,6 +17,7 @@ from app.schemas.common import ApiResponse
 from app.services.trade_service import TradeService
 from app.services.chart_service import ChartService
 from app.services.channel_service import ChannelService
+from app.services.market_service import MarketService
 from app.services.risk_guard_service import RiskGuardService
 from app.core.exceptions import AppException, NotFoundError, BusinessValidationError
 from app.core.logger import logger
@@ -24,44 +25,45 @@ from app.core.logger import logger
 router = APIRouter(prefix="/trades", tags=["Trades"])
 
 
-async def generate_and_attach_chart_task(
-    trade_id: str,
-    symbol: str,
-    timeframe: str,
-    entry: float,
-    sl: Optional[float],
-    tp: Optional[float]
-):
-    """
-    Background worker that runs chart rendering without delaying the HTTP response.
-    Zero-Defect Rule: Opens an independent AsyncSessionLocal session for the background task.
-    """
-    try:
-        chart_url = await ChartService.generate_trade_chart(
-            trade_id=trade_id,
-            symbol=symbol,
-            timeframe=timeframe,
-            entry=entry,
-            sl=sl,
-            tp=tp,
-        )
+async def fetch_and_generate_trade_chart(
+    db: AsyncSession,
+    trade: Trade,
+    timeframe: str = "15m",
+) -> Trade:
+    """Unified flow for both initial trade creation and chart regeneration: fetches real OHLCV and saves mplfinance PNG."""
+    tf = (timeframe or "15m").strip()
+    df = await MarketService.fetch_ohlcv_dataframe(
+        symbol=trade.symbol,
+        timeframe=tf,
+        limit=80,
+        center_price=float(trade.entry_price),
+    )
+    chart_url = await ChartService.generate_trade_chart(
+        trade_id=str(trade.id),
+        symbol=trade.symbol,
+        timeframe=tf,
+        entry=float(trade.entry_price),
+        sl=float(trade.stop_loss) if trade.stop_loss else None,
+        tp=float(trade.take_profit) if trade.take_profit else None,
+        df=df,
+    )
+    if trade.chart_image_url and trade.chart_image_url != chart_url:
+        ChartService.remove_chart_file(trade.chart_image_url)
 
-        async with AsyncSessionLocal() as bg_session:
-            res = await bg_session.execute(select(Trade).where(Trade.id == trade_id))
-            trade = res.scalar_one_or_none()
-            if trade and not trade.is_custom_chart:
-                trade.chart_image_url = chart_url
-                trade.has_chart_snapshot = True
-                await bg_session.commit()
-                logger.info(f"Attached chart {chart_url} to trade {trade_id}")
-    except Exception as e:
-        logger.warning(f"Background chart generation failed for trade {trade_id}: {e}")
+    return await TradeRepository(db).update_fields(
+        trade,
+        {
+            "chart_timeframe": tf,
+            "chart_image_url": chart_url,
+            "has_chart_snapshot": True,
+            "is_custom_chart": False,
+        },
+    )
 
 
 @router.post("", response_model=TradeResponseSchema, status_code=201)
 async def create_new_trade(
     trade_in: TradeCreateSchema,
-    background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -85,16 +87,14 @@ async def create_new_trade(
 
     trade, _ = await TradeService.create_trade(db, current_user.id, trade_in)
 
-    # Schedule background chart generation
-    background_tasks.add_task(
-        generate_and_attach_chart_task,
-        trade_id=str(trade.id),
-        symbol=trade.symbol,
-        timeframe=trade.chart_timeframe,
-        entry=float(trade.entry_price),
-        sl=float(trade.stop_loss) if trade.stop_loss else None,
-        tp=float(trade.take_profit) if trade.take_profit else None
-    )
+    try:
+        trade = await fetch_and_generate_trade_chart(
+            db=db,
+            trade=trade,
+            timeframe=trade.chart_timeframe or "15m",
+        )
+    except Exception as e:
+        logger.warning(f"Initial chart generation failed for trade {trade.id}: {e}")
 
     return TradeService.trade_to_response(trade)
 
@@ -190,26 +190,7 @@ async def regenerate_trade_chart(
     if not trade:
         raise NotFoundError("معامله مورد نظر یافت نشد.")
 
-    chart_url = await ChartService.generate_trade_chart(
-        trade_id=str(trade.id),
-        symbol=trade.symbol,
-        timeframe=timeframe,
-        entry=float(trade.entry_price),
-        sl=float(trade.stop_loss) if trade.stop_loss else None,
-        tp=float(trade.take_profit) if trade.take_profit else None,
-    )
-    if trade.chart_image_url and trade.chart_image_url != chart_url:
-        ChartService.remove_chart_file(trade.chart_image_url)
-
-    updated = await repo.update_fields(
-        trade,
-        {
-            "chart_timeframe": timeframe,
-            "chart_image_url": chart_url,
-            "has_chart_snapshot": True,
-            "is_custom_chart": False,
-        },
-    )
+    updated = await fetch_and_generate_trade_chart(db=db, trade=trade, timeframe=timeframe)
     return TradeService.trade_to_response(updated)
 
 

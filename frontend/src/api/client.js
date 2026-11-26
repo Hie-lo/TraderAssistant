@@ -33,7 +33,9 @@ const request = async (endpoint, options = {}) => {
     } catch (e) {
       // Non-JSON response
     }
-    throw new Error(errorDetail);
+    const err = new Error(errorDetail);
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
@@ -74,6 +76,12 @@ export const api = {
     }),
 
   getVipPlans: () => request("/api/v1/vip/plans"),
+
+  getMarketKlines: (symbol, timeframe = "15m", limit = 200, signal) =>
+    request(
+      `/api/v1/market/klines?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+      signal ? { signal } : {}
+    ),
 
   submitVipPayment: (planDuration, file) => {
     const formData = new FormData();

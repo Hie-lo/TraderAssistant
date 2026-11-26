@@ -2,13 +2,16 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { api } from './api/client';
 import VipUpgradeModal from './components/VipUpgradeModal';
 import AdminCustomerPanel from './components/AdminCustomerPanel';
+import VipWelcomeModal, { VIP_WELCOME_DISMISSED_KEY } from './components/VipWelcomeModal';
+import VipChartOverlay from './components/VipChartOverlay';
+import SuperchartView from './components/SuperchartView';
 
 const FALLBACK_PAIRS = [
   { symbol: 'BTCUSDT', label: 'BTC / USDT', base: 'BTC', icon: '\u20bf', color: 'text-yellow-500 bg-yellow-500/10', defaultPrice: '64250.00', step: 5 },
   { symbol: 'ETHUSDT', label: 'ETH / USDT', base: 'ETH', icon: '\u039e', color: 'text-indigo-400 bg-indigo-500/10', defaultPrice: '3420.00', step: 1 },
   { symbol: 'SOLUSDT', label: 'SOL / USDT', base: 'SOL', icon: '\u25ce', color: 'text-purple-400 bg-purple-500/10', defaultPrice: '148.50', step: 0.1 },
   { symbol: 'BNBUSDT', label: 'BNB / USDT', base: 'BNB', icon: '\u2756', color: 'text-amber-400 bg-amber-500/10', defaultPrice: '585.00', step: 0.1 },
-  { symbol: 'TONUSDT', label: 'TON / USDT', base: 'TON', icon: '\U0001f48e', color: 'text-sky-400 bg-sky-500/10', defaultPrice: '5.45', step: 0.001 },
+  { symbol: 'TONUSDT', label: 'TON / USDT', base: 'TON', icon: '💎', color: 'text-sky-400 bg-sky-500/10', defaultPrice: '5.45', step: 0.001 },
   { symbol: 'XRPUSDT', label: 'XRP / USDT', base: 'XRP', icon: '\u2715', color: 'text-gray-300 bg-gray-500/10', defaultPrice: '0.58', step: 0.0001 },
 ];
 
@@ -145,6 +148,10 @@ const App = () => {
   const [subscriptionEndDate, setSubscriptionEndDate] = useState(null);
   const [vipConfig, setVipConfig] = useState(null);
   const [isVipModalOpen, setIsVipModalOpen] = useState(false);
+  const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
+  const [isVipWelcomeOpen, setIsVipWelcomeOpen] = useState(false);
+  const [adminSlotMode, setAdminSlotMode] = useState('admin');
+  const [isAdminDrawerOpen, setIsAdminDrawerOpen] = useState(false);
   const [isRegeneratingChart, setIsRegeneratingChart] = useState(false);
   const [channelTemplate, setChannelTemplate] = useState('');
   const [channelIdInput, setChannelIdInput] = useState('');
@@ -227,9 +234,11 @@ const App = () => {
       setUserPhoto(tg.photo_url);
     }
 
+    let isMounted = true;
     const loadBootstrap = async () => {
       try {
         const data = await api.getBootstrap();
+        if (!isMounted) return;
         if (data.user?.first_name && !getTelegramUser()?.first_name) {
           setUserName(data.user.first_name);
         }
@@ -238,6 +247,15 @@ const App = () => {
         }
         if (data.user?.role) {
           setUserRole(data.user.role);
+          if (data.user.role === 'VIP') {
+            try {
+              if (window.localStorage.getItem(VIP_WELCOME_DISMISSED_KEY) !== '1') {
+                setIsVipWelcomeOpen(true);
+              }
+            } catch (e) {
+              setIsVipWelcomeOpen(true);
+            }
+          }
         }
         if (data.user?.subscriptionEndDate !== undefined) {
           setSubscriptionEndDate(data.user.subscriptionEndDate);
@@ -274,9 +292,14 @@ const App = () => {
         }
       } catch (err) {
         console.warn('Bootstrap load failed, using local fallbacks:', err);
+      } finally {
+        if (isMounted) setBootstrapLoaded(true);
       }
     };
     loadBootstrap();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // --- Drag-to-Scroll State for Market Ticker ---
@@ -2085,10 +2108,10 @@ const App = () => {
                         onClick={() => setIsVipModalOpen(true)}
                         className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-gray-950 text-[10px] font-bold"
                       >
-                        \U0001f451 \u0627\u0631\u062a\u0642\u0627 \u0628\u0647 VIP
+                        👑 ارتقا به VIP
                       </button>
                     )}
-                    <button type="button" onClick={() => setSaveErrorToast(null)} className="text-rose-400 text-xs px-1">\u2715</button>
+                    <button type="button" onClick={() => setSaveErrorToast(null)} className="text-rose-400 text-xs px-1">✕</button>
                   </div>
                 </div>
               )}
@@ -2401,7 +2424,7 @@ const App = () => {
                             }`}
                             title={isLocked ? '\u0645\u062e\u0635\u0648\u0635 \u06a9\u0627\u0631\u0628\u0631\u0627\u0646 VIP' : `\u062a\u0648\u0644\u06cc\u062f \u0686\u0627\u0631\u062a ${tf}`}
                           >
-                            {tf}{isLocked && <span className="text-[8px]">\U0001f512</span>}
+                            {tf}{isLocked && <span className="text-[8px]">🔒</span>}
                           </button>
                         );
                       })}
@@ -2410,9 +2433,9 @@ const App = () => {
                         disabled={isRegeneratingChart}
                         onClick={() => (userRole === 'USER' ? setIsVipModalOpen(true) : handleRegenerateChart(draftTrade.chartTimeframe || '15m'))}
                         className="px-1.5 py-0.5 rounded text-[9px] font-bold text-indigo-300 hover:bg-indigo-500/20 border-r border-gray-800"
-                        title="\u0628\u0627\u0632\u062a\u0648\u0644\u06cc\u062f \u0686\u0627\u0631\u062a"
+                        title="بازتولید چارت"
                       >
-                        {isRegeneratingChart ? '...' : (userRole === 'USER' ? '\U0001f504\U0001f512' : '\U0001f504')}
+                        {isRegeneratingChart ? '...' : (userRole === 'USER' ? '🔄🔒' : '🔄')}
                       </button>
                     </div>
                   )}
@@ -2860,17 +2883,17 @@ const App = () => {
           />
         )}
 
-        {/* ==================== TAB 4: EMPTY PLACEHOLDER SLOT ==================== */}
-        {activeTab === 'empty' && (
-          <div className="p-6 flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center text-center space-y-3 pb-6">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gray-950 border border-dashed border-gray-700 flex items-center justify-center text-gray-500">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-            </div>
-            <h3 className="text-sm sm:text-base font-bold text-gray-300">بخش قابلیت‌های آینده</h3>
-            <p className="text-xs sm:text-sm text-gray-500 max-w-xs sm:max-w-sm leading-relaxed">
-              این جایگاه برای فیچرهای بعدی شما (مانند هشدار هوشمند قیمت، غربالگر بازار یا دستیار هوش مصنوعی) رزرو شده است.
-            </p>
-          </div>
+        {/* ==================== TAB 4B: INTERACTIVE SUPERCHART (STRICT VIP/ADMIN GATE) ==================== */}
+        {activeTab === 'superchart' && (
+          bootstrapLoaded && (userRole === 'VIP' || userRole === 'ADMIN') ? (
+            <SuperchartView
+              pairs={pairs}
+              initialSymbol={selectedPair?.symbol || 'BTCUSDT'}
+              onOpenVipModal={() => setIsVipModalOpen(true)}
+            />
+          ) : (
+            <VipChartOverlay onOpenVipModal={() => setIsVipModalOpen(true)} />
+          )
         )}
 
         {/* ==================== BOTTOM NAVIGATION BAR (DOCK) ==================== */}
@@ -2880,7 +2903,7 @@ const App = () => {
             {/* 1. Far Right: Journal (ژورنال) */}
             <button
               type="button"
-              onClick={() => { setActiveTab('journal'); setSelectedTradeId(null); }}
+              onClick={() => { setActiveTab('journal'); setSelectedTradeId(null); setIsAdminDrawerOpen(false); }}
               className={`flex flex-col items-center justify-center py-1 rounded-xl transition-all relative ${
                 activeTab === 'journal' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
               }`}
@@ -2897,7 +2920,7 @@ const App = () => {
             {/* 2. Right of Home: Risk Calculator (ماشین‌حساب) */}
             <button
               type="button"
-              onClick={() => { setActiveTab('calc'); setSelectedTradeId(null); }}
+              onClick={() => { setActiveTab('calc'); setSelectedTradeId(null); setIsAdminDrawerOpen(false); }}
               className={`flex flex-col items-center justify-center py-1 rounded-xl transition-all ${
                 activeTab === 'calc' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
               }`}
@@ -2910,7 +2933,7 @@ const App = () => {
             <div className="flex flex-col items-center justify-end py-1">
               <button
                 type="button"
-                onClick={() => { setActiveTab('home'); setSelectedTradeId(null); }}
+                onClick={() => { setActiveTab('home'); setSelectedTradeId(null); setIsAdminDrawerOpen(false); }}
                 className={`-mt-4 w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center transition-all border-4 border-gray-900 shadow-xl ${
                   activeTab === 'home'
                     ? 'bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-blue-500/40 scale-105'
@@ -2924,33 +2947,89 @@ const App = () => {
               </span>
             </div>
 
-            {/* 4. Left of Home: Empty Button (فعلاً خالی) */}
-            <button
-              type="button"
-              onClick={() => { setActiveTab(userRole === 'ADMIN' ? 'admin' : 'empty'); setSelectedTradeId(null); }}
-              className={`flex flex-col items-center justify-center py-1 rounded-xl transition-all ${
-                (activeTab === 'admin' || activeTab === 'empty') ? 'text-indigo-400' : (userRole === 'ADMIN' ? 'text-gray-400 hover:text-indigo-300' : 'text-gray-600 hover:text-gray-400')
-              }`}
-            >
-              {userRole === 'ADMIN' ? (
-                <>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                  <span className="text-[9px] sm:text-[10px] font-bold mt-1">مدیریت</span>
-                </>
-              ) : (
-                <>
-                  <div className="w-[18px] h-[18px] rounded-md border border-dashed border-current flex items-center justify-center">
-                    <span className="w-1 h-1 rounded-full bg-current"></span>
-                  </div>
-                  <span className="text-[9px] sm:text-[10px] font-medium mt-1">به‌زودی</span>
-                </>
+            {/* 4. Chart / Admin Toggle Slot with Slide-Up Admin Drawer */}
+            <div className="relative flex flex-col items-center justify-center">
+              {userRole === 'ADMIN' && (
+                <div
+                  className={`absolute bottom-full mb-2 w-full rounded-xl bg-gray-900 border border-indigo-500/40 shadow-xl shadow-black/60 overflow-hidden transition-all duration-200 ease-out origin-bottom z-40 ${
+                    isAdminDrawerOpen
+                      ? 'opacity-100 translate-y-0 scale-y-100 pointer-events-auto'
+                      : 'opacity-0 translate-y-2 scale-y-90 pointer-events-none'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMode = adminSlotMode === 'admin' ? 'superchart' : 'admin';
+                      setAdminSlotMode(nextMode);
+                      setActiveTab(nextMode);
+                      setSelectedTradeId(null);
+                      setIsAdminDrawerOpen(false);
+                    }}
+                    className="w-full py-2 px-1 flex flex-col items-center justify-center gap-0.5 text-amber-300 hover:bg-indigo-500/20 transition-colors"
+                  >
+                    {adminSlotMode === 'admin' ? (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                        <span className="text-[9px] font-bold">چارت</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        <span className="text-[9px] font-bold">مدیریت</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               )}
-            </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTradeId(null);
+                  if (userRole === 'ADMIN') {
+                    if (activeTab === adminSlotMode) {
+                      setIsAdminDrawerOpen((prev) => !prev);
+                    } else {
+                      setActiveTab(adminSlotMode);
+                      setIsAdminDrawerOpen(false);
+                    }
+                  } else {
+                    setActiveTab('superchart');
+                  }
+                }}
+                className={`w-full flex flex-col items-center justify-center py-1 rounded-xl transition-all ${
+                  activeTab === 'admin' || activeTab === 'superchart'
+                    ? 'text-amber-400'
+                    : 'text-gray-400 hover:text-amber-300'
+                }`}
+              >
+                {userRole === 'ADMIN' && adminSlotMode === 'admin' ? (
+                  <>
+                    <div className="relative">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                      <span className="-top-1 -right-1.5 text-[7px] text-amber-300 absolute">▲</span>
+                    </div>
+                    <span className="text-[9px] sm:text-[10px] font-bold mt-1">مدیریت</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="relative">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                      {userRole === 'ADMIN' && (
+                        <span className="-top-1 -right-1.5 text-[7px] text-amber-300 absolute">▲</span>
+                      )}
+                    </div>
+                    <span className="text-[9px] sm:text-[10px] font-bold mt-1">چارت</span>
+                  </>
+                )}
+              </button>
+            </div>
 
             {/* 5. Far Left: Portfolio (پورتفولیو) */}
             <button
               type="button"
-              onClick={() => { setActiveTab('portfolio'); setSelectedTradeId(null); }}
+              onClick={() => { setActiveTab('portfolio'); setSelectedTradeId(null); setIsAdminDrawerOpen(false); }}
               className={`flex flex-col items-center justify-center py-1 rounded-xl transition-all ${
                 activeTab === 'portfolio' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
               }`}
@@ -2963,6 +3042,12 @@ const App = () => {
         </div>
 
       </div>
+
+      <VipWelcomeModal
+        isOpen={isVipWelcomeOpen}
+        onClose={() => setIsVipWelcomeOpen(false)}
+        userName={userName}
+      />
 
       <VipUpgradeModal
         isOpen={isVipModalOpen}

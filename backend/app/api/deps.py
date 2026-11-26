@@ -66,6 +66,30 @@ async def require_admin(
     raise AuthorizationError("دسترسی به بخش مدیریت فقط برای ادمین‌های سیستم مجاز است.")
 
 
+async def require_vip_role(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> AuthenticatedUser:
+    """Enforces active VIP or ADMIN status against the DB (including subscription expiration checks)."""
+    from app.repositories.user_repo import UserRepository
+
+    user_repo = UserRepository(db)
+    db_user = await user_repo.get_by_id(user.id)
+
+    # Mock/super-admin fallback only if user explicitly carries ADMIN privileges in verified token/config
+    if db_user is None:
+        if user.role == "ADMIN" or user.id in settings.SUPER_ADMIN_IDS:
+            return user
+        raise AuthorizationError("دسترسی به سوپرچارت فقط برای کاربران VIP فعال مجاز است.")
+
+    effective_role = "ADMIN" if user.role == "ADMIN" else await user_repo.resolve_effective_role(db_user)
+    if effective_role not in ("VIP", "ADMIN"):
+        raise AuthorizationError("اشتراک VIP شما فعال نیست یا منقضی شده است.")
+
+    user.role = effective_role
+    return user
+
+
 def check_heavy_limit(user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:
     """Enforces strict rate limits on heavy CPU/IO endpoints (chart generation & upload)."""
     RateLimiter.check_rate_limit(user.id, is_heavy=True, username=user.username)

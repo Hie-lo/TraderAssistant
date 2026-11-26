@@ -29,3 +29,26 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+.superchart-canvas {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.fullscreen-landscape {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+  z-index: 9999;
+}
+
+@supports (width: 100dvw) {
+  .fullscreen-landscape {
+    width: 100dvh;
+    height: 100dvw;
+  }
+}
