@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { init, dispose } from 'klinecharts';
 import {
   TrendingUp,
@@ -9,8 +9,13 @@ import {
   EyeOff,
   Smartphone,
   X,
+  Move,
+  ChevronDown,
+  Search,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { api } from '../api/client';
+import CenteredModal from './CenteredModal';
 
 const TIMEFRAMES = [
   { id: '1m', label: '1m', period: { span: 1, type: 'minute' } },
@@ -38,16 +43,18 @@ const SHAPE_COLORS = [
 ];
 
 const INDICATORS = [
-  { id: 'EMA', label: 'EMA', isOverlay: true },
-  { id: 'BOLL', label: 'BOLL', isOverlay: true },
-  { id: 'VOL', label: 'VOL', isOverlay: false },
-  { id: 'RSI', label: 'RSI', isOverlay: false },
-  { id: 'MACD', label: 'MACD', isOverlay: false },
+  { id: 'MA', label: 'MA', desc: 'میانگین متحرک ساده (Moving Average)', isOverlay: true },
+  { id: 'EMA', label: 'EMA', desc: 'میانگین متحرک نمایی (Exponential MA)', isOverlay: true },
+  { id: 'BOLL', label: 'BOLL', desc: 'باندهای بولینگر (Bollinger Bands)', isOverlay: true },
+  { id: 'VOL', label: 'VOL', desc: 'حجم معاملات (Volume)', isOverlay: false },
+  { id: 'MACD', label: 'MACD', desc: 'مکدی و هیستوگرام مومنتوم', isOverlay: false },
+  { id: 'RSI', label: 'RSI', desc: 'شاخص قدرت نسبی (RSI 14)', isOverlay: false },
 ];
 
 const DRAWINGS_STORAGE_PREFIX = 'superchart_drawings_v1_';
 const INDICATORS_STORAGE_KEY = 'superchart_indicators_v1';
 const LEGEND_STORAGE_KEY = 'superchart_legend_visible_v1';
+const THROTTLE_MS = 75;
 
 const safeReadJson = (key, fallback) => {
   try {
@@ -88,7 +95,7 @@ const normalizeCandle = (raw) => {
   return { timestamp, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
 };
 
-const buildChartStyles = (showLegend) => ({
+export const buildSuperchartStyles = (showLegend, isLandscape) => ({
   grid: {
     show: true,
     horizontal: { color: '#1e293b', style: 'dashed' },
@@ -155,33 +162,57 @@ const buildChartStyles = (showLegend) => ({
       },
     },
   },
+  overlay: {
+    point: {
+      color: '#3b82f6',
+      borderColor: 'rgba(59, 130, 246, 0.35)',
+      borderSize: 2,
+      radius: 8,
+      activeColor: '#60a5fa',
+      activeBorderColor: 'rgba(96, 165, 250, 0.45)',
+      activeBorderSize: 5,
+      activeRadius: 11,
+    },
+    line: {
+      style: 'solid',
+      size: 2.5,
+      color: '#3b82f6',
+      dashedValue: [2, 2],
+    },
+  },
   xAxis: {
     axisLine: { color: '#334155' },
     tickText: { color: '#94a3b8', size: 10 },
   },
-  yAxis: {
-    axisLine: { color: '#334155' },
-    tickText: { color: '#94a3b8', size: 10 },
-  },
+  yAxis: isLandscape
+    ? {
+        size: 76,
+        axisLine: { color: '#475569', size: 1.5 },
+        tickLine: { color: '#475569', length: 4 },
+        tickText: { color: '#cbd5e1', size: 11, marginStart: 6, marginEnd: 8 },
+      }
+    : {
+        size: 48,
+        axisLine: { color: '#334155', size: 1 },
+        tickLine: { color: '#334155', length: 2 },
+        tickText: { color: '#94a3b8', size: 9, marginStart: 2, marginEnd: 3 },
+      },
   crosshair: {
     horizontal: { line: { color: '#64748b' } },
     vertical: { line: { color: '#64748b' } },
   },
 });
 
-const mapRotatedTouch = (touch, box, target) => {
-  const clientX = box.left + (touch.clientY - box.top);
-  const clientY = box.top + (box.right - touch.clientX);
-  const pageX = clientX + window.scrollX;
-  const pageY = clientY + window.scrollY;
-
+const mapRotatedTouch = (touch, rootBox, target) => {
+  const clientX = rootBox.left + (touch.clientY - rootBox.top);
+  const clientY = rootBox.top + (rootBox.right - touch.clientX);
   return new Touch({
     identifier: touch.identifier,
     target,
     clientX,
     clientY,
-    pageX,
-    pageY,
+    pageX: clientX + window.scrollX,
+    pageY: clientY + window.scrollY,
     screenX: clientX,
     screenY: clientY,
     radiusX: touch.radiusX || 1,
@@ -191,20 +222,38 @@ const mapRotatedTouch = (touch, box, target) => {
   });
 };
 
-const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal }) => {
+const SuperchartView = ({
+  pairs = [],
+  marketPrices = {},
+  initialSymbol = 'BTCUSDT',
+  onOpenVipModal,
+}) => {
   const wrapperRef = useRef(null);
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const wsRef = useRef(null);
   const isRestoringRef = useRef(false);
   const hasInitialDataRef = useRef(false);
-  const mountedRef = useRef(true);
+  const dragCleanupRef = useRef(null);
+
+  // Phase 4: Mutable tick buffer & throttle refs (zero React re-renders per tick)
+  const latestTickRef = useRef(null);
+  const lastFlushTimeRef = useRef(0);
+  const rafIdRef = useRef(null);
+  const throttleTimerRef = useRef(null);
 
   const [isChartReady, setIsChartReady] = useState(false);
   const [symbol, setSymbol] = useState(initialSymbol || 'BTCUSDT');
   const [timeframe, setTimeframe] = useState('15m');
   const [activeTool, setActiveTool] = useState(null);
-  const [selectedOverlay, setSelectedOverlay] = useState(null); // { id, color }
+  const [selectedOverlay, setSelectedOverlay] = useState(null); // { id, color, paneId }
+  const [dragHandlePos, setDragHandlePos] = useState(null); // { x, y }
+  const [isDraggingHandle, setIsDraggingHandle] = useState(false);
+
+  const [isSymbolModalOpen, setIsSymbolModalOpen] = useState(false);
+  const [symbolSearch, setSymbolSearch] = useState('');
+  const [isIndicatorsModalOpen, setIsIndicatorsModalOpen] = useState(false);
+
   const [activeIndicators, setActiveIndicators] = useState(() => {
     const saved = safeReadJson(INDICATORS_STORAGE_KEY, ['VOL']);
     return Array.isArray(saved) ? saved : ['VOL'];
@@ -222,6 +271,50 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
+
+  const isCssRotatedRef = useRef(isCssRotated);
+  isCssRotatedRef.current = isCssRotated;
+
+  const selectedOverlayRef = useRef(selectedOverlay);
+  selectedOverlayRef.current = selectedOverlay;
+
+  const computeDragHandlePos = useCallback((overlayObj) => {
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    if (!chart || !container || !overlayObj?.id) {
+      setDragHandlePos(null);
+      return;
+    }
+
+    const found = chart.getOverlays({ id: overlayObj.id })?.[0];
+    if (!found || !Array.isArray(found.points) || found.points.length === 0) {
+      setDragHandlePos(null);
+      return;
+    }
+
+    const paneId = found.paneId || overlayObj.paneId || 'candle_pane';
+    const rawPixels = chart.convertToPixel(found.points, { paneId });
+    const pixels = Array.isArray(rawPixels) ? rawPixels : [rawPixels];
+
+    const xs = pixels.map((p) => p?.x).filter((v) => typeof v === 'number' && Number.isFinite(v));
+    const ys = pixels.map((p) => p?.y).filter((v) => typeof v === 'number' && Number.isFinite(v));
+
+    if (ys.length === 0) {
+      setDragHandlePos(null);
+      return;
+    }
+
+    const paneSize = chart.getSize(paneId) || { width: container.clientWidth, height: container.clientHeight };
+    const maxW = Math.max(80, paneSize.width || container.clientWidth || 320);
+    const maxH = Math.max(80, paneSize.height || container.clientHeight || 260);
+
+    const avgX = xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : maxW * 0.5;
+    const bottomY = Math.max(...ys) + 22;
+
+    const clampedX = Math.min(Math.max(avgX, 24), maxW - 24);
+    const clampedY = Math.min(Math.max(bottomY, 24), maxH - 22);
+    setDragHandlePos({ x: clampedX, y: clampedY });
+  }, []);
 
   const persistDrawingsForCurrentSymbol = useCallback(() => {
     const chart = chartRef.current;
@@ -242,29 +335,72 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
   }, []);
 
   const attachOverlayLifecycle = useCallback(
-    (overlayConfig) => ({
-      ...overlayConfig,
-      onDrawEnd: () => {
-        setActiveTool(null);
-        persistDrawingsForCurrentSymbol();
-      },
-      onPressedMoveEnd: () => persistDrawingsForCurrentSymbol(),
-      onRemoved: ({ overlay }) => {
-        setSelectedOverlay((prev) => (prev?.id === overlay?.id ? null : prev));
-        persistDrawingsForCurrentSymbol();
-      },
-      onSelected: ({ overlay }) => {
-        if (!overlay) return;
-        setSelectedOverlay({
-          id: overlay.id,
-          color: overlay.styles?.line?.color || '#3b82f6',
-        });
-      },
-      onDeselected: ({ overlay }) => {
-        setSelectedOverlay((prev) => (prev?.id === overlay?.id ? null : prev));
-      },
-    }),
-    [persistDrawingsForCurrentSymbol]
+    (overlayConfig) => {
+      const color = overlayConfig.styles?.line?.color || '#3b82f6';
+      return {
+        ...overlayConfig,
+        styles: {
+          line: { color, size: 2.5 },
+          point: {
+            color,
+            borderColor: 'rgba(59, 130, 246, 0.35)',
+            radius: 8,
+            activeRadius: 11,
+            activeBorderColor: color,
+            activeBorderSize: 5,
+          },
+        },
+        onDrawEnd: ({ overlay }) => {
+          setActiveTool(null);
+          persistDrawingsForCurrentSymbol();
+          if (overlay) {
+            const nextSel = {
+              id: overlay.id,
+              color: overlay.styles?.line?.color || color,
+              paneId: overlay.paneId || 'candle_pane',
+            };
+            setSelectedOverlay(nextSel);
+            computeDragHandlePos(nextSel);
+          }
+        },
+        onPressedMoving: ({ overlay }) => {
+          if (overlay && selectedOverlayRef.current?.id === overlay.id) {
+            computeDragHandlePos(selectedOverlayRef.current);
+          }
+        },
+        onPressedMoveEnd: ({ overlay }) => {
+          persistDrawingsForCurrentSymbol();
+          if (overlay && selectedOverlayRef.current?.id === overlay.id) {
+            computeDragHandlePos(selectedOverlayRef.current);
+          }
+        },
+        onRemoved: ({ overlay }) => {
+          setSelectedOverlay((prev) => (prev?.id === overlay?.id ? null : prev));
+          setDragHandlePos(null);
+          persistDrawingsForCurrentSymbol();
+        },
+        onSelected: ({ overlay }) => {
+          if (!overlay) return;
+          const nextSel = {
+            id: overlay.id,
+            color: overlay.styles?.line?.color || '#3b82f6',
+            paneId: overlay.paneId || 'candle_pane',
+          };
+          setSelectedOverlay(nextSel);
+          computeDragHandlePos(nextSel);
+        },
+        onDeselected: ({ overlay }) => {
+          setSelectedOverlay((prev) => {
+            if (prev?.id === overlay?.id) {
+              setDragHandlePos(null);
+              return null;
+            }
+            return prev;
+          });
+        },
+      };
+    },
+    [persistDrawingsForCurrentSymbol, computeDragHandlePos]
   );
 
   const restoreDrawingsForSymbol = useCallback(
@@ -275,6 +411,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
       try {
         chart.removeOverlay();
         setSelectedOverlay(null);
+        setDragHandlePos(null);
         const saved = safeReadJson(`${DRAWINGS_STORAGE_PREFIX}${sym}`, []);
         if (Array.isArray(saved) && saved.length > 0) {
           saved.forEach((item) => {
@@ -284,10 +421,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
               attachOverlayLifecycle({
                 name: item.name,
                 points: item.points,
-                styles: {
-                  line: { color },
-                  point: { borderColor: color, activeBorderColor: color },
-                },
+                styles: { line: { color } },
               })
             );
           });
@@ -301,12 +435,11 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
   // 1. Initialize klinecharts once and dispose strictly on unmount
   useEffect(() => {
-    mountedRef.current = true;
     const container = containerRef.current;
     if (!container) return undefined;
 
     const chart = init(container, {
-      styles: buildChartStyles(showLegend),
+      styles: buildSuperchartStyles(showLegend, isLandscape),
     });
     if (chart && typeof chart.updateData !== 'function') {
       chart.updateData = (candle) => {
@@ -329,8 +462,19 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
       });
     }
 
+    const syncSelectedHandle = () => {
+      if (selectedOverlayRef.current) {
+        computeDragHandlePos(selectedOverlayRef.current);
+      }
+    };
+
+    chart.subscribeAction('onScroll', syncSelectedHandle);
+    chart.subscribeAction('onZoom', syncSelectedHandle);
+    chart.subscribeAction('onPaneDrag', syncSelectedHandle);
+
     const handleResize = () => {
       chartRef.current?.resize();
+      syncSelectedHandle();
     };
 
     let observer = null;
@@ -341,10 +485,13 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     window.addEventListener('resize', handleResize);
 
     return () => {
-      mountedRef.current = false;
       setIsChartReady(false);
+      dragCleanupRef.current?.();
       window.removeEventListener('resize', handleResize);
       observer?.disconnect();
+      chart.unsubscribeAction('onScroll', syncSelectedHandle);
+      chart.unsubscribeAction('onZoom', syncSelectedHandle);
+      chart.unsubscribeAction('onPaneDrag', syncSelectedHandle);
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -352,53 +499,60 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
       dispose(container);
       chartRef.current = null;
     };
-  }, []);
+  }, [computeDragHandlePos]);
 
-  // 2. Sync compact legend visibility toggle dynamically
+  // 2. Sync dynamic Y-axis thickness & OHLCV legend visibility without reloading data
   useEffect(() => {
     safeWriteJson(LEGEND_STORAGE_KEY, showLegend);
-    chartRef.current?.setStyles(buildChartStyles(showLegend));
-  }, [showLegend]);
-
-  // 3. Resize chart when switching portrait/landscape
-  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return undefined;
+    chart.setStyles(buildSuperchartStyles(showLegend, isLandscape));
     const timer = window.setTimeout(() => {
       chartRef.current?.resize();
+      if (selectedOverlayRef.current) {
+        computeDragHandlePos(selectedOverlayRef.current);
+      }
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [isLandscape, isCssRotated]);
+  }, [showLegend, isLandscape, isCssRotated, computeDragHandlePos]);
 
-  // 4. Phase 4 CRITICAL: Landscape Touch/Mouse Coordinate Transformer
-  // Swaps & translates clientX/clientY back into unrotated canvas coordinates when CSS rotate(90deg) is active.
+  // 3. Landscape Touch/Click/Mouse Coordinate Transformer
+  // Maps physical portrait screen coordinates against chartRootEl.getBoundingClientRect()
+  // so pan, pinch zoom, and overlay tap selection align 1:1 even with multiple panes.
   useEffect(() => {
     if (!isCssRotated) return undefined;
 
-    let activeTouchPane = null;
+    let activeTouchTarget = null;
+
+    const getChartRootBox = (container) => {
+      const rootEl = container.firstElementChild || container;
+      return rootEl.getBoundingClientRect();
+    };
+
+    const isUiControl = (target) => Boolean(target?.closest?.('[data-superchart-ui="true"]'));
 
     const handleTouch = (e) => {
       if (e.__landscapeMapped) return;
       const container = containerRef.current;
       if (!container) return;
 
-      if (e.type === 'touchstart' && container.contains(e.target)) {
-        activeTouchPane = e.target;
+      if (e.type === 'touchstart') {
+        if (isUiControl(e.target) || !container.contains(e.target)) return;
+        activeTouchTarget = e.target;
       }
 
-      const targetEl = activeTouchPane && container.contains(activeTouchPane) ? activeTouchPane : null;
+      const targetEl = activeTouchTarget && container.contains(activeTouchTarget) ? activeTouchTarget : null;
       if (!targetEl) return;
 
-      if (e.type === 'touchend' || e.type === 'touchcancel') {
-        if (e.touches.length === 0) {
-          activeTouchPane = null;
-        }
+      if ((e.type === 'touchend' || e.type === 'touchcancel') && e.touches.length === 0) {
+        activeTouchTarget = null;
       }
 
-      // Check WebKit/Chromium Touch constructor availability
       if (typeof Touch === 'undefined' || typeof TouchEvent === 'undefined') return;
 
       try {
-        const box = targetEl.getBoundingClientRect();
-        const mapList = (list) => Array.from(list || []).map((t) => mapRotatedTouch(t, box, targetEl));
+        const rootBox = getChartRootBox(container);
+        const mapList = (list) => Array.from(list || []).map((t) => mapRotatedTouch(t, rootBox, targetEl));
 
         e.stopImmediatePropagation();
         if (e.cancelable && e.type !== 'touchstart') {
@@ -416,24 +570,26 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
         mappedEvent.__landscapeMapped = true;
         targetEl.dispatchEvent(mappedEvent);
       } catch (err) {
-        // Ignore if environment forbids synthetic TouchEvent construction
+        // Ignore if WebView blocks synthetic TouchEvent construction
       }
     };
 
     const handleMouse = (e) => {
       if (e.__landscapeMapped) return;
+      if (isUiControl(e.target)) return;
       const container = containerRef.current;
       if (!container || !container.contains(e.target)) return;
 
-      const box = e.target.getBoundingClientRect();
-      const clientX = box.left + (e.clientY - box.top);
-      const clientY = box.top + (box.right - e.clientX);
+      const rootBox = getChartRootBox(container);
+      const clientX = rootBox.left + (e.clientY - rootBox.top);
+      const clientY = rootBox.top + (rootBox.right - e.clientX);
 
       e.stopImmediatePropagation();
       const mappedMouse = new MouseEvent(e.type, {
         bubbles: true,
         cancelable: e.cancelable,
         view: window,
+        detail: e.detail,
         button: e.button,
         buttons: e.buttons,
         clientX,
@@ -451,6 +607,8 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     document.addEventListener('mousedown', handleMouse, true);
     document.addEventListener('mousemove', handleMouse, true);
     document.addEventListener('mouseup', handleMouse, true);
+    document.addEventListener('click', handleMouse, true);
+    document.addEventListener('dblclick', handleMouse, true);
 
     return () => {
       document.removeEventListener('touchstart', handleTouch, touchOpts);
@@ -460,10 +618,12 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
       document.removeEventListener('mousedown', handleMouse, true);
       document.removeEventListener('mousemove', handleMouse, true);
       document.removeEventListener('mouseup', handleMouse, true);
+      document.removeEventListener('click', handleMouse, true);
+      document.removeEventListener('dblclick', handleMouse, true);
     };
   }, [isCssRotated]);
 
-  // 5. Phase 1: klinecharts v10 DataLoader (Initial Fetch + Infinite Left Scroll)
+  // 4. Phase 1 Historical & Infinite Scroll DataLoader
   useEffect(() => {
     const chart = chartRef.current;
     if (!isChartReady || !chart) return undefined;
@@ -579,8 +739,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     };
   }, [isChartReady, symbol, timeframe, retryNonce, restoreDrawingsForSymbol]);
 
-  // 6. Real-Time Live Candle Stream (WebSocket + 3s Auto-Reconnect + Polling Fallback)
-  // Strictly bound AFTER init(chartContainer) has returned chartRef.current.
+  // 5. Phase 4: High-Performance Throttled RAF Buffer + WebSocket + Auto-Reconnect
   useEffect(() => {
     if (!isChartReady || !chartRef.current) return undefined;
 
@@ -589,11 +748,39 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     let reconnectTimer = null;
     const pollController = new AbortController();
 
-    const injectLiveCandle = (raw) => {
-      const newCandle = normalizeCandle(raw);
-      if (!newCandle || !chartRef.current || !hasInitialDataRef.current) return;
-      console.log('LIVE DATA RECEIVED:', newCandle);
-      chartRef.current.updateData(newCandle);
+    const flushBufferedTick = () => {
+      rafIdRef.current = null;
+      if (!isActive || !chartRef.current || !hasInitialDataRef.current) return;
+      const buffered = latestTickRef.current;
+      if (!buffered) return;
+
+      const now = performance.now();
+      const elapsed = now - lastFlushTimeRef.current;
+      if (elapsed < THROTTLE_MS) {
+        if (!throttleTimerRef.current) {
+          throttleTimerRef.current = window.setTimeout(() => {
+            throttleTimerRef.current = null;
+            if (isActive && !rafIdRef.current) {
+              rafIdRef.current = window.requestAnimationFrame(flushBufferedTick);
+            }
+          }, THROTTLE_MS - elapsed);
+        }
+        return;
+      }
+
+      latestTickRef.current = null;
+      lastFlushTimeRef.current = now;
+      console.log('LIVE DATA RECEIVED:', buffered);
+      chartRef.current.updateData(buffered);
+    };
+
+    const enqueueLiveCandle = (raw) => {
+      const normalized = normalizeCandle(raw);
+      if (!normalized || !hasInitialDataRef.current) return;
+      latestTickRef.current = normalized;
+      if (!rafIdRef.current) {
+        rafIdRef.current = window.requestAnimationFrame(flushBufferedTick);
+      }
     };
 
     const connectWebSocket = () => {
@@ -606,7 +793,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           if (!isActive) return;
           try {
             const parsed = JSON.parse(evt.data);
-            injectLiveCandle(parsed?.bar || parsed);
+            enqueueLiveCandle(parsed?.bar || parsed);
           } catch (parseErr) {
             // Ignore malformed JSON frames
           }
@@ -630,7 +817,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
     connectWebSocket();
 
-    // Defensive fallback polling while WebSocket is disconnected/handshaking
+    // Resilient polling fallback while WebSocket is reconnecting/unavailable
     const pollInterval = window.setInterval(async () => {
       if (!isActive || !hasInitialDataRef.current) return;
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
@@ -640,15 +827,24 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
         if (!isActive || pollController.signal.aborted) return;
         const bars = Array.isArray(res?.bars) ? res.bars : [];
         if (bars.length > 0) {
-          injectLiveCandle(bars[bars.length - 1]);
+          enqueueLiveCandle(bars[bars.length - 1]);
         }
       } catch (err) {
-        // Ignore transient fallback polling errors; WS auto-reconnect continues
+        // Ignore transient fallback errors; WS auto-reconnect continues
       }
     }, 3000);
 
     return () => {
       isActive = false;
+      latestTickRef.current = null;
+      if (rafIdRef.current) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      if (throttleTimerRef.current) {
+        window.clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       window.clearInterval(pollInterval);
       pollController.abort();
@@ -661,6 +857,84 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
       wsRef.current = null;
     };
   }, [isChartReady, symbol, timeframe]);
+
+  // Memory-safe Floating Drag Handle pointer/touch handler
+  const startHandleDrag = (startEvent) => {
+    startEvent.stopPropagation();
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    const sel = selectedOverlayRef.current;
+    if (!chart || !container || !sel?.id) return;
+
+    const overlayObj = chart.getOverlays({ id: sel.id })?.[0];
+    if (!overlayObj || !Array.isArray(overlayObj.points) || overlayObj.points.length === 0) return;
+
+    const paneId = overlayObj.paneId || sel.paneId || 'candle_pane';
+    const rawPixels = chart.convertToPixel(overlayObj.points, { paneId });
+    const startPixels = (Array.isArray(rawPixels) ? rawPixels : [rawPixels]).map((pt) => ({
+      x: Number(pt?.x ?? 0),
+      y: Number(pt?.y ?? 0),
+    }));
+
+    const chartRootEl = container.firstElementChild || container;
+    const getCanvasXY = (ev) => {
+      const pt = ev.touches?.[0] || ev.changedTouches?.[0] || ev;
+      const box = chartRootEl.getBoundingClientRect();
+      if (isCssRotatedRef.current) {
+        return {
+          x: box.left + (pt.clientY - box.top) - box.left,
+          y: box.top + (box.right - pt.clientX) - box.top,
+        };
+      }
+      return {
+        x: pt.clientX - box.left,
+        y: pt.clientY - box.top,
+      };
+    };
+
+    const origin = getCanvasXY(startEvent);
+    setIsDraggingHandle(true);
+
+    const onMove = (moveEv) => {
+      if (moveEv.cancelable) moveEv.preventDefault();
+      const curr = getCanvasXY(moveEv);
+      const dx = curr.x - origin.x;
+      const dy = curr.y - origin.y;
+
+      const shiftedPixels = startPixels.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+      const converted = chart.convertFromPixel(shiftedPixels, { paneId });
+      const nextPoints = Array.isArray(converted) ? converted : [converted];
+
+      chart.overrideOverlay({
+        id: sel.id,
+        points: nextPoints,
+      });
+      computeDragHandlePos(sel);
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      window.removeEventListener('touchcancel', onEnd);
+      dragCleanupRef.current = null;
+      setIsDraggingHandle(false);
+    };
+
+    const onEnd = () => {
+      cleanup();
+      persistDrawingsForCurrentSymbol();
+    };
+
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = cleanup;
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+    window.addEventListener('touchcancel', onEnd);
+  };
 
   const handleToggleLandscape = async () => {
     if (isLandscape) {
@@ -698,6 +972,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
   const handleClearDrawings = () => {
     chartRef.current?.removeOverlay();
     setSelectedOverlay(null);
+    setDragHandlePos(null);
     safeWriteJson(`${DRAWINGS_STORAGE_PREFIX}${symbol}`, []);
     setActiveTool(null);
   };
@@ -708,8 +983,15 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     chart.overrideOverlay({
       id: selectedOverlay.id,
       styles: {
-        line: { color },
-        point: { borderColor: color, activeBorderColor: color },
+        line: { color, size: 2.5 },
+        point: {
+          color,
+          borderColor: color,
+          activeBorderColor: color,
+          radius: 8,
+          activeRadius: 11,
+          activeBorderSize: 5,
+        },
       },
     });
     setSelectedOverlay((prev) => (prev ? { ...prev, color } : null));
@@ -721,6 +1003,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     if (!chart || !selectedOverlay) return;
     chart.removeOverlay({ id: selectedOverlay.id });
     setSelectedOverlay(null);
+    setDragHandlePos(null);
     persistDrawingsForCurrentSymbol();
   };
 
@@ -744,10 +1027,32 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     safeWriteJson(INDICATORS_STORAGE_KEY, next);
   };
 
-  const pairOptions =
-    pairs.length > 0
-      ? pairs
-      : [{ symbol: 'BTCUSDT', label: 'BTC / USDT' }, { symbol: 'ETHUSDT', label: 'ETH / USDT' }];
+  const pairOptions = useMemo(
+    () =>
+      pairs.length > 0
+        ? pairs
+        : [
+            { symbol: 'BTCUSDT', label: 'BTC / USDT', base: 'BTC', icon: '₿', color: 'text-yellow-500 bg-yellow-500/10', defaultPrice: '64250.00' },
+            { symbol: 'ETHUSDT', label: 'ETH / USDT', base: 'ETH', icon: 'Ξ', color: 'text-indigo-400 bg-indigo-500/10', defaultPrice: '3420.00' },
+          ],
+    [pairs]
+  );
+
+  const activePairObj = useMemo(
+    () => pairOptions.find((p) => p.symbol === symbol) || pairOptions[0],
+    [pairOptions, symbol]
+  );
+
+  const filteredPairs = useMemo(() => {
+    const q = symbolSearch.trim().toLowerCase();
+    if (!q) return pairOptions;
+    return pairOptions.filter(
+      (p) =>
+        p.symbol.toLowerCase().includes(q) ||
+        (p.label && p.label.toLowerCase().includes(q)) ||
+        (p.base && p.base.toLowerCase().includes(q))
+    );
+  }, [pairOptions, symbolSearch]);
 
   return (
     <div
@@ -761,20 +1066,24 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           : 'flex-1 min-h-0 flex flex-col bg-[#0b0f19] overflow-hidden'
       }
     >
-      {/* Top Toolbar: Symbol, Timeframes, Indicators, Legend Eye Toggle & Landscape Button */}
-      <div className="shrink-0 px-2.5 py-1.5 bg-gray-950/95 border-b border-gray-800 flex flex-wrap items-center justify-between gap-1.5">
+      {/* Top Toolbar: Centered Symbol Selector Button, Timeframes, Indicators Button, Legend Eye & Landscape */}
+      <div className="shrink-0 px-2 py-1.5 bg-gray-950/95 border-b border-gray-800 flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-          <select
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            className="bg-gray-900 border border-gray-700 text-amber-300 font-mono text-[11px] font-bold rounded-lg px-2 py-1 focus:outline-none focus:border-amber-500"
+          {/* TradingView-style Symbol Modal Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              setSymbolSearch('');
+              setIsSymbolModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-700/80 px-2 py-1 rounded-lg text-[11px] font-bold text-white transition-colors"
           >
-            {pairOptions.map((p) => (
-              <option key={p.symbol} value={p.symbol}>
-                {p.label || p.symbol}
-              </option>
-            ))}
-          </select>
+            <span className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 ${activePairObj?.color || 'text-amber-400 bg-amber-500/10'}`}>
+              {activePairObj?.icon || '•'}
+            </span>
+            <span className="font-mono text-amber-300">{activePairObj?.label || symbol}</span>
+            <ChevronDown size={12} className="text-gray-400" />
+          </button>
 
           <div dir="ltr" className="flex items-center gap-0.5 bg-gray-900 p-0.5 rounded-lg border border-gray-800 overflow-x-auto">
             {TIMEFRAMES.map((tf) => (
@@ -793,25 +1102,14 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
             ))}
           </div>
 
-          <div dir="ltr" className="flex items-center gap-1">
-            {INDICATORS.map((ind) => {
-              const on = activeIndicators.includes(ind.id);
-              return (
-                <button
-                  key={ind.id}
-                  type="button"
-                  onClick={() => handleToggleIndicator(ind)}
-                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold border transition-colors ${
-                    on
-                      ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                      : 'bg-gray-950 border-gray-800 text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  {ind.label}
-                </button>
-              );
-            })}
-          </div>
+          <button
+            type="button"
+            onClick={() => setIsIndicatorsModalOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-900 hover:bg-gray-800 border border-gray-700/80 text-[10px] font-bold text-emerald-300 transition-colors"
+          >
+            <SlidersHorizontal size={12} />
+            <span>اندیکاتورها ({activeIndicators.length})</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
@@ -841,7 +1139,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
       {/* Main Chart Body (dir="ltr" keeps Vertical Drawing Sidebar strictly on the LEFT) */}
       <div dir="ltr" className="relative flex-1 min-h-[280px] flex overflow-hidden bg-[#0b0f19]">
-        {/* Phase 2: Sleek Left Vertical Drawing Sidebar */}
+        {/* Sleek Left Vertical Drawing Sidebar */}
         <aside className="w-11 shrink-0 bg-gray-950/95 border-r border-gray-800/90 flex flex-col items-center py-2 gap-1.5 z-20">
           {DRAWING_TOOLS.map(({ id, label, Icon }) => {
             const active = activeTool === id;
@@ -874,10 +1172,11 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           </button>
         </aside>
 
-        {/* Chart Canvas Viewport + Floating Shape Edit Menu */}
+        {/* Chart Canvas Viewport + Floating Shape Edit Menu + Dedicated Floating Move Handle */}
         <div className="relative flex-1 min-w-0 h-full bg-[#0b0f19]">
-          {/* Phase 3: Animated Top Shape Edit Menu */}
+          {/* Animated Top Shape Edit Menu */}
           <div
+            data-superchart-ui="true"
             className={`absolute top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-950/95 border border-gray-700/90 shadow-2xl backdrop-blur-md transition-all duration-200 ease-out ${
               selectedOverlay
                 ? 'opacity-100 translate-y-0 pointer-events-auto'
@@ -911,6 +1210,29 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
             </button>
           </div>
 
+          {/* Dedicated Floating Move/Drag Handle directly below selected shape */}
+          {selectedOverlay && dragHandlePos && (
+            <button
+              type="button"
+              data-superchart-ui="true"
+              onMouseDown={startHandleDrag}
+              onTouchStart={startHandleDrag}
+              title="Drag to Move Shape"
+              style={{
+                left: `${dragHandlePos.x}px`,
+                top: `${dragHandlePos.y}px`,
+                touchAction: 'none',
+              }}
+              className={`absolute -translate-x-1/2 -translate-y-1/2 z-40 w-8 h-8 rounded-full border flex items-center justify-center shadow-lg transition-colors ${
+                isDraggingHandle
+                  ? 'bg-amber-500 border-amber-300 text-gray-950 scale-110 cursor-grabbing'
+                  : 'bg-gray-950/95 border-amber-500/60 text-amber-300 hover:bg-amber-500/20 cursor-grab'
+              }`}
+            >
+              <Move size={14} />
+            </button>
+          )}
+
           <div
             ref={containerRef}
             className="superchart-canvas w-full h-full"
@@ -929,6 +1251,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           {errorBanner && (
             <div
               dir="rtl"
+              data-superchart-ui="true"
               className="absolute inset-0 z-30 flex items-center justify-center bg-gray-950/85 backdrop-blur-sm p-4"
             >
               <div className="max-w-xs w-full rounded-2xl border border-rose-500/40 bg-gray-900 p-4 text-center space-y-3 shadow-2xl">
@@ -959,6 +1282,118 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           )}
         </div>
       </div>
+
+      {/* Phase 3: Centered Symbol Selector Modal */}
+      <CenteredModal
+        isOpen={isSymbolModalOpen}
+        onClose={() => setIsSymbolModalOpen(false)}
+        title="انتخاب نماد معاملاتی"
+        subtitle="ارز مورد نظر را جستجو و انتخاب کنید"
+      >
+        <div className="space-y-3">
+          <div className="relative">
+            <input
+              type="text"
+              value={symbolSearch}
+              onChange={(e) => setSymbolSearch(e.target.value)}
+              placeholder="جستجوی نماد (مثلاً BTC)..."
+              autoFocus
+              className="w-full bg-gray-950 border border-gray-700 rounded-xl pr-8 pl-3 py-2 text-xs text-white outline-none focus:border-amber-500"
+            />
+            <Search size={14} className="text-gray-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+
+          <div className="max-h-64 overflow-y-auto space-y-1 pr-0.5">
+            {filteredPairs.length === 0 ? (
+              <div className="text-xs text-gray-500 text-center py-6">
+                نمادی با این نام یافت نشد
+              </div>
+            ) : (
+              filteredPairs.map((pair) => {
+                const rowPrice = marketPrices[pair.symbol] || pair.defaultPrice || '0.00';
+                const isSelected = pair.symbol === symbol;
+                return (
+                  <button
+                    key={pair.symbol}
+                    type="button"
+                    onClick={() => {
+                      setSymbol(pair.symbol);
+                      setIsSymbolModalOpen(false);
+                      setSymbolSearch('');
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors ${
+                      isSelected
+                        ? 'bg-amber-500/15 border border-amber-500/40 text-amber-300 font-bold'
+                        : 'hover:bg-gray-800/80 text-gray-200 border border-transparent'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold shrink-0 ${pair.color || 'text-amber-400 bg-amber-500/10'}`}>
+                        {pair.icon || '•'}
+                      </span>
+                      <span>{pair.label || pair.symbol}</span>
+                    </span>
+                    <span dir="ltr" className="font-mono text-[11px] text-gray-300">
+                      ${rowPrice}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </CenteredModal>
+
+      {/* Phase 3: Centered Indicators Modal */}
+      <CenteredModal
+        isOpen={isIndicatorsModalOpen}
+        onClose={() => setIsIndicatorsModalOpen(false)}
+        title="اندیکاتورهای تکنیکال"
+        subtitle="نمایش یا مخفی‌سازی شاخص‌ها روی سوپرچارت"
+      >
+        <div className="space-y-2">
+          {INDICATORS.map((ind) => {
+            const enabled = activeIndicators.includes(ind.id);
+            return (
+              <button
+                key={ind.id}
+                type="button"
+                onClick={() => handleToggleIndicator(ind)}
+                className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors text-right ${
+                  enabled
+                    ? 'bg-emerald-500/10 border-emerald-500/40'
+                    : 'bg-gray-950/70 border-gray-800 hover:border-gray-700'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span dir="ltr" className="font-mono text-xs font-extrabold text-white">
+                      {ind.label}
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">
+                      {ind.isOverlay ? 'روی کندل' : 'پنجره مجزا'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5 truncate">{ind.desc}</p>
+                </div>
+
+                <div
+                  dir="ltr"
+                  className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 ${
+                    enabled ? 'bg-emerald-500' : 'bg-gray-700'
+                  }`}
+                >
+                  <div
+                    className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                      enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </CenteredModal>
     </div>
   );
 };

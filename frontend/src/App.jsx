@@ -2888,6 +2888,7 @@ const App = () => {
           bootstrapLoaded && (userRole === 'VIP' || userRole === 'ADMIN') ? (
             <SuperchartView
               pairs={pairs}
+              marketPrices={marketPrices}
               initialSymbol={selectedPair?.symbol || 'BTCUSDT'}
               onOpenVipModal={() => setIsVipModalOpen(true)}
             />
