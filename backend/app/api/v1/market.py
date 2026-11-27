@@ -123,8 +123,10 @@ async def stream_superchart_klines(
 
     async def _emit_candle(raw_candle: dict) -> None:
         nonlocal last_sent, last_emit_time
+        raw_ts = int(raw_candle["timestamp"])
+        ts_ms = raw_ts * 1000 if 0 < raw_ts < 1_000_000_000_000 else raw_ts
         candle_payload = {
-            "timestamp": int(raw_candle["timestamp"]),
+            "timestamp": ts_ms,
             "open": float(raw_candle["open"]),
             "high": float(raw_candle["high"]),
             "low": float(raw_candle["low"]),

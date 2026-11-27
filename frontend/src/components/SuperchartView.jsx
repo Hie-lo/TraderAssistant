@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { api } from '../api/client';
+import { chartStreamManager, normalizeCandlePayload } from '../services/ChartStreamManager';
 import CenteredModal from './CenteredModal';
 
 const TIMEFRAMES = [
@@ -54,7 +55,6 @@ const INDICATORS = [
 const DRAWINGS_STORAGE_PREFIX = 'superchart_drawings_v1_';
 const INDICATORS_STORAGE_KEY = 'superchart_indicators_v1';
 const LEGEND_STORAGE_KEY = 'superchart_legend_visible_v1';
-const THROTTLE_MS = 75;
 
 const safeReadJson = (key, fallback) => {
   try {
@@ -80,19 +80,6 @@ const inferPrecision = (bars) => {
   if (sample < 0.1) return 6;
   if (sample < 10) return 4;
   return 2;
-};
-
-const normalizeCandle = (raw) => {
-  if (!raw) return null;
-  const tsNum = Number(raw.timestamp);
-  const timestamp = tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum;
-  const open = Number(raw.open);
-  const high = Number(raw.high);
-  const low = Number(raw.low);
-  const close = Number(raw.close);
-  const volume = Number(raw.volume ?? 0);
-  if (![timestamp, open, high, low, close].every(Number.isFinite)) return null;
-  return { timestamp, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
 };
 
 export const buildSuperchartStyles = (showLegend, isLandscape) => ({
@@ -197,6 +184,14 @@ export const buildSuperchartStyles = (showLegend, isLandscape) => ({
         tickLine: { color: '#334155', length: 2 },
         tickText: { color: '#94a3b8', size: 9, marginStart: 2, marginEnd: 3 },
       },
+  separator: {
+    size: 2,
+    activeSize: 22,
+    dragEnabled: true,
+    color: '#334155',
+    fill: true,
+    activeBackgroundColor: 'rgba(245, 158, 11, 0.25)',
+  },
   crosshair: {
     horizontal: { line: { color: '#64748b' } },
     vertical: { line: { color: '#64748b' } },
@@ -231,16 +226,9 @@ const SuperchartView = ({
   const wrapperRef = useRef(null);
   const containerRef = useRef(null);
   const chartRef = useRef(null);
-  const wsRef = useRef(null);
   const isRestoringRef = useRef(false);
-  const hasInitialDataRef = useRef(false);
   const dragCleanupRef = useRef(null);
-
-  // Phase 4: Mutable tick buffer & throttle refs (zero React re-renders per tick)
-  const latestTickRef = useRef(null);
-  const lastFlushTimeRef = useRef(0);
-  const rafIdRef = useRef(null);
-  const throttleTimerRef = useRef(null);
+  const sepDragCleanupRef = useRef(null);
 
   const [isChartReady, setIsChartReady] = useState(false);
   const [symbol, setSymbol] = useState(initialSymbol || 'BTCUSDT');
@@ -249,6 +237,8 @@ const SuperchartView = ({
   const [selectedOverlay, setSelectedOverlay] = useState(null); // { id, color, paneId }
   const [dragHandlePos, setDragHandlePos] = useState(null); // { x, y }
   const [isDraggingHandle, setIsDraggingHandle] = useState(false);
+  const [separators, setSeparators] = useState([]); // [{ id, top, topPaneId, bottomPaneId }]
+  const [draggingSepId, setDraggingSepId] = useState(null);
 
   const [isSymbolModalOpen, setIsSymbolModalOpen] = useState(false);
   const [symbolSearch, setSymbolSearch] = useState('');
@@ -433,20 +423,46 @@ const SuperchartView = ({
     [attachOverlayLifecycle]
   );
 
-  // 1. Initialize klinecharts once and dispose strictly on unmount
+  const syncSeparatorHandles = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart || typeof chart.getSeparatorPanes !== 'function') {
+      setSeparators([]);
+      return;
+    }
+    const sepMap = chart.getSeparatorPanes();
+    const list = [];
+    sepMap?.forEach((sepPane, id) => {
+      const topPane = sepPane.getTopPane?.();
+      const bottomPane = sepPane.getBottomPane?.();
+      const top = sepPane.getBounding?.()?.top;
+      if (topPane && bottomPane && typeof top === 'number' && Number.isFinite(top)) {
+        list.push({
+          id,
+          top,
+          topPaneId: topPane.getId(),
+          bottomPaneId: bottomPane.getId(),
+        });
+      }
+    });
+    setSeparators(list);
+  }, []);
+
+  // 1. Initialize klinecharts once and bind ChartStreamManager singleton
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
 
     const chart = init(container, {
+      layout: {
+        pane: {
+          dragEnabled: true,
+          minHeight: 44,
+        },
+      },
       styles: buildSuperchartStyles(showLegend, isLandscape),
     });
-    if (chart && typeof chart.updateData !== 'function') {
-      chart.updateData = (candle) => {
-        chart.getChartStore()?._addData(candle, 'update');
-      };
-    }
     chartRef.current = chart;
+    chartStreamManager.attachChart(chart);
     setIsChartReady(Boolean(chart));
 
     const savedIndicators = safeReadJson(INDICATORS_STORAGE_KEY, ['VOL']);
@@ -461,6 +477,7 @@ const SuperchartView = ({
         }
       });
     }
+    chart.setPaneOptions({ dragEnabled: true, minHeight: 44 });
 
     const syncSelectedHandle = () => {
       if (selectedOverlayRef.current) {
@@ -468,13 +485,18 @@ const SuperchartView = ({
       }
     };
 
+    const handlePaneLayoutSync = () => {
+      syncSelectedHandle();
+      syncSeparatorHandles();
+    };
+
     chart.subscribeAction('onScroll', syncSelectedHandle);
     chart.subscribeAction('onZoom', syncSelectedHandle);
-    chart.subscribeAction('onPaneDrag', syncSelectedHandle);
+    chart.subscribeAction('onPaneDrag', handlePaneLayoutSync);
 
     const handleResize = () => {
       chartRef.current?.resize();
-      syncSelectedHandle();
+      handlePaneLayoutSync();
     };
 
     let observer = null;
@@ -483,23 +505,23 @@ const SuperchartView = ({
       observer.observe(container);
     }
     window.addEventListener('resize', handleResize);
+    const sepInitRaf = window.requestAnimationFrame(syncSeparatorHandles);
 
     return () => {
       setIsChartReady(false);
+      window.cancelAnimationFrame(sepInitRaf);
       dragCleanupRef.current?.();
+      sepDragCleanupRef.current?.();
       window.removeEventListener('resize', handleResize);
       observer?.disconnect();
       chart.unsubscribeAction('onScroll', syncSelectedHandle);
       chart.unsubscribeAction('onZoom', syncSelectedHandle);
-      chart.unsubscribeAction('onPaneDrag', syncSelectedHandle);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      chart.unsubscribeAction('onPaneDrag', handlePaneLayoutSync);
+      chartStreamManager.detachChart();
       dispose(container);
       chartRef.current = null;
     };
-  }, [computeDragHandlePos]);
+  }, [computeDragHandlePos, syncSeparatorHandles]);
 
   // 2. Sync dynamic Y-axis thickness & OHLCV legend visibility without reloading data
   useEffect(() => {
@@ -509,12 +531,13 @@ const SuperchartView = ({
     chart.setStyles(buildSuperchartStyles(showLegend, isLandscape));
     const timer = window.setTimeout(() => {
       chartRef.current?.resize();
+      syncSeparatorHandles();
       if (selectedOverlayRef.current) {
         computeDragHandlePos(selectedOverlayRef.current);
       }
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [showLegend, isLandscape, isCssRotated, computeDragHandlePos]);
+  }, [showLegend, isLandscape, isCssRotated, computeDragHandlePos, syncSeparatorHandles]);
 
   // 3. Landscape Touch/Click/Mouse Coordinate Transformer
   // Maps physical portrait screen coordinates against chartRootEl.getBoundingClientRect()
@@ -632,7 +655,7 @@ const SuperchartView = ({
     let retryTimer = null;
     let attempt = 0;
     const activeControllers = new Set();
-    hasInitialDataRef.current = false;
+    chartStreamManager.setHasInitialData(false);
 
     const tfMeta = TIMEFRAMES.find((t) => t.id === timeframe) || TIMEFRAMES[2];
 
@@ -657,7 +680,9 @@ const SuperchartView = ({
           const payload = await api.getMarketKlines(symbol, timeframe, 200, beforeTs, controller.signal);
           if (!isEffectActive || controller.signal.aborted) return;
 
-          const bars = Array.isArray(payload?.bars) ? payload.bars.map(normalizeCandle).filter(Boolean) : [];
+          const bars = Array.isArray(payload?.bars)
+            ? payload.bars.map(normalizeCandlePayload).filter(Boolean)
+            : [];
           if (type === 'init' && bars.length === 0) {
             const emptyErr = new Error('داده‌ای از صرافی دریافت نشد.');
             emptyErr.status = 503;
@@ -680,8 +705,9 @@ const SuperchartView = ({
           callback(bars, { forward: hasMore, backward: false });
 
           if (type === 'init') {
-            hasInitialDataRef.current = true;
+            chartStreamManager.setHasInitialData(true);
             restoreDrawingsForSymbol(symbol);
+            syncSeparatorHandles();
           }
         } catch (err) {
           if (!isEffectActive || controller.signal.aborted || err?.name === 'AbortError') return;
@@ -732,129 +758,19 @@ const SuperchartView = ({
 
     return () => {
       isEffectActive = false;
-      hasInitialDataRef.current = false;
+      chartStreamManager.setHasInitialData(false);
       if (retryTimer) window.clearTimeout(retryTimer);
       activeControllers.forEach((ctrl) => ctrl.abort());
       activeControllers.clear();
     };
-  }, [isChartReady, symbol, timeframe, retryNonce, restoreDrawingsForSymbol]);
+  }, [isChartReady, symbol, timeframe, retryNonce, restoreDrawingsForSymbol, syncSeparatorHandles]);
 
-  // 5. Phase 4: High-Performance Throttled RAF Buffer + WebSocket + Auto-Reconnect
+  // 5. Phase 1: Bind ChartStreamManager singleton strictly outside React tick state
   useEffect(() => {
     if (!isChartReady || !chartRef.current) return undefined;
-
-    let isActive = true;
-    let ws = null;
-    let reconnectTimer = null;
-    const pollController = new AbortController();
-
-    const flushBufferedTick = () => {
-      rafIdRef.current = null;
-      if (!isActive || !chartRef.current || !hasInitialDataRef.current) return;
-      const buffered = latestTickRef.current;
-      if (!buffered) return;
-
-      const now = performance.now();
-      const elapsed = now - lastFlushTimeRef.current;
-      if (elapsed < THROTTLE_MS) {
-        if (!throttleTimerRef.current) {
-          throttleTimerRef.current = window.setTimeout(() => {
-            throttleTimerRef.current = null;
-            if (isActive && !rafIdRef.current) {
-              rafIdRef.current = window.requestAnimationFrame(flushBufferedTick);
-            }
-          }, THROTTLE_MS - elapsed);
-        }
-        return;
-      }
-
-      latestTickRef.current = null;
-      lastFlushTimeRef.current = now;
-      console.log('LIVE DATA RECEIVED:', buffered);
-      chartRef.current.updateData(buffered);
-    };
-
-    const enqueueLiveCandle = (raw) => {
-      const normalized = normalizeCandle(raw);
-      if (!normalized || !hasInitialDataRef.current) return;
-      latestTickRef.current = normalized;
-      if (!rafIdRef.current) {
-        rafIdRef.current = window.requestAnimationFrame(flushBufferedTick);
-      }
-    };
-
-    const connectWebSocket = () => {
-      if (!isActive) return;
-      try {
-        ws = new WebSocket(api.getMarketStreamUrl(symbol, timeframe));
-        wsRef.current = ws;
-
-        ws.onmessage = (evt) => {
-          if (!isActive) return;
-          try {
-            const parsed = JSON.parse(evt.data);
-            enqueueLiveCandle(parsed?.bar || parsed);
-          } catch (parseErr) {
-            // Ignore malformed JSON frames
-          }
-        };
-
-        ws.onerror = () => {
-          if (ws && ws.readyState !== WebSocket.CLOSED) {
-            ws.close();
-          }
-        };
-
-        ws.onclose = () => {
-          if (!isActive) return;
-          wsRef.current = null;
-          reconnectTimer = window.setTimeout(connectWebSocket, 3000);
-        };
-      } catch (wsErr) {
-        reconnectTimer = window.setTimeout(connectWebSocket, 3000);
-      }
-    };
-
-    connectWebSocket();
-
-    // Resilient polling fallback while WebSocket is reconnecting/unavailable
-    const pollInterval = window.setInterval(async () => {
-      if (!isActive || !hasInitialDataRef.current) return;
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
-
-      try {
-        const res = await api.getMarketKlines(symbol, timeframe, 2, null, pollController.signal);
-        if (!isActive || pollController.signal.aborted) return;
-        const bars = Array.isArray(res?.bars) ? res.bars : [];
-        if (bars.length > 0) {
-          enqueueLiveCandle(bars[bars.length - 1]);
-        }
-      } catch (err) {
-        // Ignore transient fallback errors; WS auto-reconnect continues
-      }
-    }, 3000);
-
+    chartStreamManager.connect(symbol, timeframe);
     return () => {
-      isActive = false;
-      latestTickRef.current = null;
-      if (rafIdRef.current) {
-        window.cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      if (throttleTimerRef.current) {
-        window.clearTimeout(throttleTimerRef.current);
-        throttleTimerRef.current = null;
-      }
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      window.clearInterval(pollInterval);
-      pollController.abort();
-      if (ws) {
-        ws.onclose = null;
-        ws.onerror = null;
-        ws.onmessage = null;
-        ws.close();
-      }
-      wsRef.current = null;
+      chartStreamManager.disconnect();
     };
   }, [isChartReady, symbol, timeframe]);
 
@@ -1020,11 +936,81 @@ const SuperchartView = ({
         chart.createIndicator({ name: indMeta.id, paneId: 'candle_pane' }, true);
       } else {
         chart.createIndicator(indMeta.id);
+        chart.setPaneOptions({ dragEnabled: true, minHeight: 44 });
       }
       next = [...activeIndicators, indMeta.id];
     }
     setActiveIndicators(next);
     safeWriteJson(INDICATORS_STORAGE_KEY, next);
+    window.requestAnimationFrame(syncSeparatorHandles);
+  };
+
+  // Phase 2: 24px Touch-Friendly Sub-Pane Separator Drag Handler (Portrait & Landscape safe)
+  const startSeparatorDrag = (startEvent, sep) => {
+    startEvent.stopPropagation();
+    if (startEvent.cancelable) startEvent.preventDefault();
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    if (!chart || !container) return;
+
+    const topSize = chart.getSize(sep.topPaneId);
+    const bottomSize = chart.getSize(sep.bottomPaneId);
+    if (!topSize || !bottomSize) return;
+
+    const startTopH = Number(topSize.height);
+    const startBottomH = Number(bottomSize.height);
+    const minH = 44;
+    const chartRootEl = container.firstElementChild || container;
+
+    const getCanvasY = (ev) => {
+      const pt = ev.touches?.[0] || ev.changedTouches?.[0] || ev;
+      const box = chartRootEl.getBoundingClientRect();
+      if (isCssRotatedRef.current) {
+        return box.right - pt.clientX;
+      }
+      return pt.clientY - box.top;
+    };
+
+    const startY = getCanvasY(startEvent);
+    setDraggingSepId(sep.id);
+
+    const onMove = (moveEv) => {
+      if (moveEv.cancelable) moveEv.preventDefault();
+      const rawDy = getCanvasY(moveEv) - startY;
+      const maxUp = -(startTopH - minH);
+      const maxDown = startBottomH - minH;
+      const dy = Math.min(Math.max(rawDy, maxUp), maxDown);
+
+      chart.setPaneOptions({ id: sep.topPaneId, height: Math.round(startTopH + dy), dragEnabled: true });
+      chart.setPaneOptions({ id: sep.bottomPaneId, height: Math.round(startBottomH - dy), dragEnabled: true });
+      syncSeparatorHandles();
+      if (selectedOverlayRef.current) {
+        computeDragHandlePos(selectedOverlayRef.current);
+      }
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      window.removeEventListener('touchcancel', onEnd);
+      sepDragCleanupRef.current = null;
+      setDraggingSepId(null);
+    };
+
+    const onEnd = () => {
+      cleanup();
+      syncSeparatorHandles();
+    };
+
+    sepDragCleanupRef.current?.();
+    sepDragCleanupRef.current = cleanup;
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+    window.addEventListener('touchcancel', onEnd);
   };
 
   const pairOptions = useMemo(
@@ -1238,6 +1224,33 @@ const SuperchartView = ({
             className="superchart-canvas w-full h-full"
             style={{ touchAction: 'none' }}
           />
+
+          {/* Phase 2: 24px Invisible Touch Grab Handles over Sub-Pane Separators */}
+          {separators.map((sep) => (
+            <div
+              key={sep.id}
+              data-superchart-ui="true"
+              onMouseDown={(e) => startSeparatorDrag(e, sep)}
+              onTouchStart={(e) => startSeparatorDrag(e, sep)}
+              title="کشیدن برای تغییر ارتفاع اندیکاتور"
+              style={{
+                top: `${Math.max(0, sep.top - 12)}px`,
+                left: 0,
+                right: `${isLandscape ? 76 : 48}px`,
+                height: '24px',
+                touchAction: 'none',
+              }}
+              className="group absolute z-30 flex items-center justify-center cursor-ns-resize select-none"
+            >
+              <span
+                className={`w-9 h-1 rounded-full transition-colors ${
+                  draggingSepId === sep.id
+                    ? 'bg-amber-400'
+                    : 'bg-slate-600/75 group-hover:bg-amber-400/80'
+                }`}
+              />
+            </div>
+          ))}
 
           {(isLoading || isLoadingMore) && (
             <div
