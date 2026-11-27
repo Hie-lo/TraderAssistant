@@ -936,7 +936,8 @@ async def test_superchart_klines_vip_gating_and_failsafe_503(monkeypatch):
 
 
 def test_superchart_websocket_stream_vip_gating_and_push(monkeypatch):
-    """Verify WebSocket /api/v1/market/stream rejects non-VIPs and pushes live candle frames to VIP/ADMIN."""
+    """Verify WebSocket /api/v1/market/stream rejects non-VIPs, broadcasts live ticks, and cleans up rooms."""
+    import asyncio
     from unittest.mock import AsyncMock
     from fastapi.testclient import TestClient
     from starlette.websockets import WebSocketDisconnect
@@ -945,9 +946,19 @@ def test_superchart_websocket_stream_vip_gating_and_push(monkeypatch):
     from app.services.market_service import MarketService
 
     live_bar = [
-        {"timestamp": 1700000900000, "open": 60100.0, "high": 60250.0, "low": 60050.0, "close": 60210.0, "volume": 19.4}
+        {"timestamp": 1700000900, "open": 60100.0, "high": 60250.0, "low": 60050.0, "close": 60210.0, "volume": 19.4}
     ]
     monkeypatch.setattr(MarketService, "fetch_live_ohlcv_strict", AsyncMock(return_value=live_bar))
+
+    async def fake_stream(symbol, timeframe, on_tick):
+        await asyncio.sleep(0.05)
+        await on_tick(
+            {"timestamp": 1700000900, "open": 60100.0, "high": 60310.0, "low": 60050.0, "close": 60299.0, "volume": 25.0}
+        )
+        while True:
+            await asyncio.sleep(1.0)
+
+    monkeypatch.setattr(MarketService, "stream_exchange_klines", fake_stream)
 
     # 1. Normal USER denied (4403 close)
     monkeypatch.setattr(
@@ -961,14 +972,22 @@ def test_superchart_websocket_stream_vip_gating_and_push(monkeypatch):
                 pass
         assert exc_info.value.code == 4403
 
-        # 2. ADMIN/VIP receives live kline frame immediately
+        # 2. ADMIN/VIP receives initial snapshot + streamed live tick with ms timestamp
         monkeypatch.setattr(
             market_router_mod,
             "verify_telegram_init_data",
             lambda _raw: AuthenticatedUser(id=111111111, first_name="Admin", role="ADMIN"),
         )
         with client.websocket_connect("/api/v1/market/stream?symbol=BTCUSDT&timeframe=15m&init_data=TEST") as ws:
-            msg = ws.receive_json()
-            assert set(msg.keys()) == {"timestamp", "open", "high", "low", "close", "volume"}
-            assert msg["timestamp"] == 1700000900000
-            assert msg["close"] == 60210.0
+            msg1 = ws.receive_json()
+            assert set(msg1.keys()) == {"timestamp", "open", "high", "low", "close", "volume"}
+            assert msg1["timestamp"] == 1700000900000
+            assert msg1["close"] == 60210.0
+
+            msg2 = ws.receive_json()
+            assert set(msg2.keys()) == {"timestamp", "open", "high", "low", "close", "volume"}
+            assert msg2["timestamp"] == 1700000900000
+            assert msg2["close"] == 60299.0
+
+        assert market_router_mod.connection_manager._rooms == {}
+        assert market_router_mod.connection_manager._tasks == {}

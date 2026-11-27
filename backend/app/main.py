@@ -23,6 +23,7 @@ from app.api.v1.router import api_v1_router
 from app.api.v1.trades import router as trades_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.payments import router as payments_router
+from app.api.v1.market import connection_manager as market_connection_manager
 from app.bot.loader import bot, dp
 from app.bot.middlewares import BotAccessControlMiddleware
 from app.bot.handlers import user_start, user_alerts, user_screener, admin_panel
@@ -146,6 +147,8 @@ async def lifespan(app: FastAPI):
     logger.info("Initiating shutdown sequence...")
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+    await market_connection_manager.shutdown()
 
     if bot_polling_task and not bot_polling_task.done():
         bot_polling_task.cancel()

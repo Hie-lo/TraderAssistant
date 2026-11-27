@@ -1,9 +1,7 @@
 import asyncio
 import html
-import json
 import time
-from typing import Optional
-import aiohttp
+from typing import Dict, Optional, Set, Tuple
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -19,6 +17,133 @@ from app.services.market_service import MarketService
 router = APIRouter(prefix="/market", tags=["Market"])
 
 ALLOWED_TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}
+StreamKey = Tuple[str, str]
+
+
+class ConnectionManager:
+    """Manages active VIP WebSocket clients per (symbol, timeframe) and fans out exchange ticks."""
+
+    def __init__(self) -> None:
+        self._rooms: Dict[StreamKey, Set[WebSocket]] = {}
+        self._tasks: Dict[StreamKey, asyncio.Task] = {}
+        self._latest_ticks: Dict[StreamKey, dict] = {}
+        self._last_sent_sig: Dict[StreamKey, tuple] = {}
+        self._last_broadcast_log: Dict[StreamKey, float] = {}
+
+    async def connect(self, websocket: WebSocket, symbol: str, timeframe: str) -> StreamKey:
+        await websocket.accept()
+        key: StreamKey = (symbol, timeframe)
+        self._rooms.setdefault(key, set()).add(websocket)
+
+        if key not in self._tasks or self._tasks[key].done():
+            self._tasks[key] = asyncio.create_task(self._consume_exchange(key))
+
+        # Send immediate initial candle frame if cached or via strict REST lookup
+        cached = self._latest_ticks.get(key)
+        if cached:
+            await websocket.send_json(cached)
+        else:
+            try:
+                bars = await MarketService.fetch_live_ohlcv_strict(symbol=symbol, timeframe=timeframe, limit=2)
+                if bars:
+                    latest = self._format_candle(bars[-1])
+                    self._latest_ticks[key] = latest
+                    await websocket.send_json(latest)
+            except Exception as exc:
+                logger.warning(f"Initial WS candle snapshot skipped ({symbol} {timeframe}): {exc}")
+
+        return key
+
+    async def disconnect(self, websocket: WebSocket, key: StreamKey) -> None:
+        clients = self._rooms.get(key)
+        if clients:
+            clients.discard(websocket)
+            if not clients:
+                self._rooms.pop(key, None)
+                self._last_sent_sig.pop(key, None)
+                self._last_broadcast_log.pop(key, None)
+                task = self._tasks.pop(key, None)
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+    @staticmethod
+    def _format_candle(raw: dict) -> dict:
+        raw_ts = int(raw["timestamp"])
+        ts_ms = raw_ts * 1000 if 0 < raw_ts < 1_000_000_000_000 else raw_ts
+        return {
+            "timestamp": ts_ms,
+            "open": float(raw["open"]),
+            "high": float(raw["high"]),
+            "low": float(raw["low"]),
+            "close": float(raw["close"]),
+            "volume": float(raw["volume"]),
+        }
+
+    async def broadcast(self, key: StreamKey, raw_candle: dict) -> None:
+        candle = self._format_candle(raw_candle)
+        sig = (
+            candle["timestamp"],
+            candle["open"],
+            candle["high"],
+            candle["low"],
+            candle["close"],
+            candle["volume"],
+        )
+        if sig == self._last_sent_sig.get(key):
+            return
+        self._last_sent_sig[key] = sig
+        self._latest_ticks[key] = candle
+
+        active_connections = list(self._rooms.get(key, ()))
+        if not active_connections:
+            return
+
+        now = time.monotonic()
+        if now - self._last_broadcast_log.get(key, 0.0) >= 5.0:
+            self._last_broadcast_log[key] = now
+            logger.info(f"Broadcasting to {len(active_connections)} clients ({key[0]} {key[1]})")
+
+        dead_sockets = []
+        for ws in active_connections:
+            try:
+                await ws.send_json(candle)
+            except Exception:
+                dead_sockets.append(ws)
+
+        for ws in dead_sockets:
+            await self.disconnect(ws, key)
+
+    async def _consume_exchange(self, key: StreamKey) -> None:
+        symbol, timeframe = key
+        try:
+            await MarketService.stream_exchange_klines(
+                symbol=symbol,
+                timeframe=timeframe,
+                on_tick=lambda tick: self.broadcast(key, tick),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"Exchange stream task exited unexpectedly ({symbol} {timeframe}): {exc}")
+
+    async def shutdown(self) -> None:
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        self._rooms.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+
+connection_manager = ConnectionManager()
 
 
 async def _notify_admin_exchange_error(error_details: str, symbol: str, timeframe: str) -> None:
@@ -95,7 +220,7 @@ async def stream_superchart_klines(
     timeframe: str = Query("15m"),
     init_data: Optional[str] = Query(None),
 ):
-    """VIP-gated WebSocket pushing real-time latest active candle updates for Superchart."""
+    """VIP-gated WebSocket endpoint managed via ConnectionManager with clean disconnect handling."""
     try:
         user = verify_telegram_init_data(init_data)
         norm_symbol, tf = _normalize_symbol_and_tf(symbol, timeframe)
@@ -116,104 +241,11 @@ async def stream_superchart_klines(
         await websocket.close(code=4403)
         return
 
-    await websocket.accept()
-    last_sent = None
-    last_emit_time = 0.0
-    min_emit_interval = 0.10  # Throttle micro-ticks to max ~10 updates/sec
-
-    async def _emit_candle(raw_candle: dict) -> None:
-        nonlocal last_sent, last_emit_time
-        raw_ts = int(raw_candle["timestamp"])
-        ts_ms = raw_ts * 1000 if 0 < raw_ts < 1_000_000_000_000 else raw_ts
-        candle_payload = {
-            "timestamp": ts_ms,
-            "open": float(raw_candle["open"]),
-            "high": float(raw_candle["high"]),
-            "low": float(raw_candle["low"]),
-            "close": float(raw_candle["close"]),
-            "volume": float(raw_candle["volume"]),
-        }
-        sig = (
-            candle_payload["timestamp"],
-            candle_payload["open"],
-            candle_payload["high"],
-            candle_payload["low"],
-            candle_payload["close"],
-            candle_payload["volume"],
-        )
-        now = time.monotonic()
-        if sig == last_sent:
-            return
-        if last_sent is not None and (now - last_emit_time) < min_emit_interval:
-            return
-        last_sent = sig
-        last_emit_time = now
-        await websocket.send_json(candle_payload)
-
+    stream_key = await connection_manager.connect(websocket, norm_symbol, tf)
     try:
-        # 1. Push initial snapshot immediately before entering real-time loop
-        try:
-            initial_bars = await MarketService.fetch_live_ohlcv_strict(
-                symbol=norm_symbol,
-                timeframe=tf,
-                limit=2,
-            )
-            if initial_bars:
-                await _emit_candle(initial_bars[-1])
-        except WebSocketDisconnect:
-            raise
-        except Exception as init_exc:
-            logger.warning(f"Initial WebSocket kline snapshot failed ({norm_symbol} {tf}): {init_exc}")
-
-        # 2. Primary real-time stream via Binance WS with throttled emission
-        stream_urls = (
-            f"wss://fstream.binance.com/ws/{norm_symbol.lower()}@kline_{tf}",
-            f"wss://stream.binance.com:9443/ws/{norm_symbol.lower()}@kline_{tf}",
-        )
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            while True:
-                streamed = False
-                for ws_url in stream_urls:
-                    try:
-                        async with session.ws_connect(ws_url, heartbeat=20.0) as binance_ws:
-                            streamed = True
-                            async for msg in binance_ws:
-                                if msg.type == aiohttp.WSMsgType.TEXT:
-                                    payload = json.loads(msg.data)
-                                    k = payload.get("k")
-                                    if k:
-                                        await _emit_candle(
-                                            {
-                                                "timestamp": int(k["t"]),
-                                                "open": float(k["o"]),
-                                                "high": float(k["h"]),
-                                                "low": float(k["l"]),
-                                                "close": float(k["c"]),
-                                                "volume": float(k["v"]),
-                                            }
-                                        )
-                                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                                    break
-                    except WebSocketDisconnect:
-                        raise
-                    except Exception as binance_exc:
-                        logger.debug(f"Binance WS stream fallback ({ws_url}): {binance_exc}")
-
-                # 3. Fallback polling if outbound Binance WS is unreachable
-                if not streamed:
-                    try:
-                        latest_bars = await MarketService.fetch_live_ohlcv_strict(
-                            symbol=norm_symbol,
-                            timeframe=tf,
-                            limit=2,
-                        )
-                        if latest_bars:
-                            await _emit_candle(latest_bars[-1])
-                    except WebSocketDisconnect:
-                        raise
-                    except Exception as poll_exc:
-                        logger.warning(f"WebSocket market stream poll error ({norm_symbol} {tf}): {poll_exc}")
-
-                await asyncio.sleep(1.5)
+        while True:
+            await websocket.receive_text()
     except (WebSocketDisconnect, asyncio.CancelledError):
-        return
+        pass
+    finally:
+        await connection_manager.disconnect(websocket, stream_key)
