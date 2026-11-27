@@ -895,6 +895,17 @@ async def test_superchart_klines_vip_gating_and_failsafe_503(monkeypatch):
             r_vip = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m", headers=headers)
             assert r_vip.status_code == 200
             assert len(r_vip.json()["bars"]) == 25
+            assert r_vip.json()["hasMore"] is False
+
+            # 2.5 Historical pagination via before_timestamp
+            hist_mock = AsyncMock(return_value=sample_bars[:5])
+            monkeypatch.setattr(MarketService, "fetch_live_ohlcv_strict", hist_mock)
+            r_hist = await ac.get(
+                "/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m&limit=20&before_timestamp=1700004500000",
+                headers=headers,
+            )
+            assert r_hist.status_code == 200
+            assert hist_mock.call_args.kwargs["before_timestamp"] == 1700004500000
 
             # 3. Exchange failure -> async admin alert + 503
             monkeypatch.setattr(
@@ -922,3 +933,41 @@ async def test_superchart_klines_vip_gating_and_failsafe_503(monkeypatch):
         async with AsyncSessionLocal() as session:
             await session.execute(delete(User).where(User.id.in_([uid_user, uid_vip])))
             await session.commit()
+
+
+def test_superchart_websocket_stream_vip_gating_and_push(monkeypatch):
+    """Verify WebSocket /api/v1/market/stream rejects non-VIPs and pushes live candle frames to VIP/ADMIN."""
+    from unittest.mock import AsyncMock
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+    from app.core.security import AuthenticatedUser
+    from app.api.v1 import market as market_router_mod
+    from app.services.market_service import MarketService
+
+    live_bar = [
+        {"timestamp": 1700000900000, "open": 60100.0, "high": 60250.0, "low": 60050.0, "close": 60210.0, "volume": 19.4}
+    ]
+    monkeypatch.setattr(MarketService, "fetch_live_ohlcv_strict", AsyncMock(return_value=live_bar))
+
+    # 1. Normal USER denied (4403 close)
+    monkeypatch.setattr(
+        market_router_mod,
+        "verify_telegram_init_data",
+        lambda _raw: AuthenticatedUser(id=555299, first_name="Free", role="USER"),
+    )
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/api/v1/market/stream?symbol=BTCUSDT&timeframe=15m&init_data=TEST"):
+                pass
+        assert exc_info.value.code == 4403
+
+        # 2. ADMIN/VIP receives live kline frame immediately
+        monkeypatch.setattr(
+            market_router_mod,
+            "verify_telegram_init_data",
+            lambda _raw: AuthenticatedUser(id=111111111, first_name="Admin", role="ADMIN"),
+        )
+        with client.websocket_connect("/api/v1/market/stream?symbol=BTCUSDT&timeframe=15m&init_data=TEST") as ws:
+            msg = ws.receive_json()
+            assert msg["type"] == "kline"
+            assert msg["bar"]["close"] == 60210.0

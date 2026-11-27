@@ -42,6 +42,7 @@ class MarketService:
         symbol: str,
         timeframe: str = "15m",
         limit: int = 80,
+        end_time: Optional[int] = None,
     ) -> List[List[float]]:
         """Fetches raw OHLCV candles from Binance via CCXT with public REST klines fallback."""
         exchange = cls.get_exchange()
@@ -50,11 +51,12 @@ class MarketService:
             norm_symbol += "USDT"
         pair_key = f"{norm_symbol[:-4]}/{norm_symbol[-4:]}"
         tf_ccxt = (timeframe or "15m").lower()
+        ccxt_params = {"endTime": int(end_time)} if end_time is not None else {}
 
         raw_candles = None
         last_error: Optional[Exception] = None
         try:
-            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=tf_ccxt, limit=limit)
+            raw_candles = await exchange.fetch_ohlcv(pair_key, timeframe=tf_ccxt, limit=limit, params=ccxt_params)
         except Exception as e:
             last_error = e
             logger.warning(f"CCXT fetch_ohlcv failed for {symbol} ({tf_ccxt}): {e}. Trying Binance REST klines.")
@@ -65,13 +67,14 @@ class MarketService:
                 "https://api.binance.com/api/v3/klines",
                 "https://data-api.binance.vision/api/v3/klines",
             )
+            rest_params = {"symbol": norm_symbol, "interval": tf_ccxt, "limit": limit}
+            if end_time is not None:
+                rest_params["endTime"] = int(end_time)
+
             async with httpx.AsyncClient(timeout=6.0) as client:
                 for url in kline_urls:
                     try:
-                        resp = await client.get(
-                            url,
-                            params={"symbol": norm_symbol, "interval": tf_ccxt, "limit": limit},
-                        )
+                        resp = await client.get(url, params=rest_params)
                         if resp.status_code == 200:
                             rows = resp.json()
                             if isinstance(rows, list) and rows:
@@ -88,6 +91,10 @@ class MarketService:
 
         if not raw_candles:
             raise RuntimeError(str(last_error) if last_error else f"Empty OHLCV payload for {norm_symbol}")
+
+        if end_time is not None:
+            raw_candles = [c for c in raw_candles if int(c[0]) <= int(end_time)]
+        raw_candles.sort(key=lambda c: int(c[0]))
         return raw_candles
 
     @classmethod
@@ -96,9 +103,16 @@ class MarketService:
         symbol: str,
         timeframe: str = "15m",
         limit: int = 200,
+        before_timestamp: Optional[int] = None,
     ) -> List[Dict[str, float]]:
         """Strictly fetches live OHLCV bars for Superchart; raises on exchange failure without fake candles."""
-        raw_candles = await cls._fetch_raw_exchange_klines(symbol=symbol, timeframe=timeframe, limit=limit)
+        end_time = int(before_timestamp) - 1 if before_timestamp is not None else None
+        raw_candles = await cls._fetch_raw_exchange_klines(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=limit,
+            end_time=end_time,
+        )
         return [
             {
                 "timestamp": int(c[0]),
@@ -109,6 +123,7 @@ class MarketService:
                 "volume": float(c[5]),
             }
             for c in raw_candles
+            if before_timestamp is None or int(c[0]) < int(before_timestamp)
         ]
 
     @classmethod

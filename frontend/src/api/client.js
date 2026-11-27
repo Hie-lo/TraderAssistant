@@ -77,11 +77,27 @@ export const api = {
 
   getVipPlans: () => request("/api/v1/vip/plans"),
 
-  getMarketKlines: (symbol, timeframe = "15m", limit = 200, signal) =>
-    request(
-      `/api/v1/market/klines?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
-      signal ? { signal } : {}
-    ),
+  getMarketKlines: (symbol, timeframe = "15m", limit = 200, beforeTimestamp = null, signal = null) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      limit: String(limit),
+    });
+    if (beforeTimestamp) {
+      params.set("before_timestamp", String(beforeTimestamp));
+    }
+    return request(`/api/v1/market/klines?${params.toString()}`, signal ? { signal } : {});
+  },
+
+  getMarketStreamUrl: (symbol, timeframe = "15m") => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      init_data: getInitData(),
+    });
+    return `${proto}//${window.location.host}/api/v1/market/stream?${params.toString()}`;
+  },
 
   submitVipPayment: (planDuration, file) => {
     const formData = new FormData();
