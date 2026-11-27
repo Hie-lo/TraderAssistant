@@ -969,5 +969,6 @@ def test_superchart_websocket_stream_vip_gating_and_push(monkeypatch):
         )
         with client.websocket_connect("/api/v1/market/stream?symbol=BTCUSDT&timeframe=15m&init_data=TEST") as ws:
             msg = ws.receive_json()
-            assert msg["type"] == "kline"
-            assert msg["bar"]["close"] == 60210.0
+            assert set(msg.keys()) == {"timestamp", "open", "high", "low", "close", "volume"}
+            assert msg["timestamp"] == 1700000900000
+            assert msg["close"] == 60210.0

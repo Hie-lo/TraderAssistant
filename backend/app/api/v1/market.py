@@ -126,14 +126,30 @@ async def stream_superchart_klines(
                 )
                 if latest_bars:
                     latest = latest_bars[-1]
-                    sig = (latest["timestamp"], latest["open"], latest["high"], latest["low"], latest["close"], latest["volume"])
+                    candle_payload = {
+                        "timestamp": int(latest["timestamp"]),
+                        "open": float(latest["open"]),
+                        "high": float(latest["high"]),
+                        "low": float(latest["low"]),
+                        "close": float(latest["close"]),
+                        "volume": float(latest["volume"]),
+                    }
+                    sig = (
+                        candle_payload["timestamp"],
+                        candle_payload["open"],
+                        candle_payload["high"],
+                        candle_payload["low"],
+                        candle_payload["close"],
+                        candle_payload["volume"],
+                    )
                     if sig != last_sent:
                         last_sent = sig
-                        await websocket.send_json({"type": "kline", "bar": latest})
+                        await websocket.send_json(candle_payload)
+            except WebSocketDisconnect:
+                raise
             except Exception as exc:
                 logger.warning(f"WebSocket market stream poll error ({norm_symbol} {tf}): {exc}")
-                await websocket.send_json({"type": "error", "detail": str(exc)})
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
     except (WebSocketDisconnect, asyncio.CancelledError):
         return

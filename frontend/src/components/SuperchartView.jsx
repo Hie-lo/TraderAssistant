@@ -75,6 +75,19 @@ const inferPrecision = (bars) => {
   return 2;
 };
 
+const normalizeCandle = (raw) => {
+  if (!raw) return null;
+  const tsNum = Number(raw.timestamp);
+  const timestamp = tsNum > 0 && tsNum < 1e12 ? tsNum * 1000 : tsNum;
+  const open = Number(raw.open);
+  const high = Number(raw.high);
+  const low = Number(raw.low);
+  const close = Number(raw.close);
+  const volume = Number(raw.volume ?? 0);
+  if (![timestamp, open, high, low, close].every(Number.isFinite)) return null;
+  return { timestamp, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
+};
+
 const buildChartStyles = (showLegend) => ({
   grid: {
     show: true,
@@ -184,8 +197,10 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
   const chartRef = useRef(null);
   const wsRef = useRef(null);
   const isRestoringRef = useRef(false);
+  const hasInitialDataRef = useRef(false);
   const mountedRef = useRef(true);
 
+  const [isChartReady, setIsChartReady] = useState(false);
   const [symbol, setSymbol] = useState(initialSymbol || 'BTCUSDT');
   const [timeframe, setTimeframe] = useState('15m');
   const [activeTool, setActiveTool] = useState(null);
@@ -293,7 +308,13 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     const chart = init(container, {
       styles: buildChartStyles(showLegend),
     });
+    if (chart && typeof chart.updateData !== 'function') {
+      chart.updateData = (candle) => {
+        chart.getChartStore()?._addData(candle, 'update');
+      };
+    }
     chartRef.current = chart;
+    setIsChartReady(Boolean(chart));
 
     const savedIndicators = safeReadJson(INDICATORS_STORAGE_KEY, ['VOL']);
     if (Array.isArray(savedIndicators)) {
@@ -321,6 +342,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
     return () => {
       mountedRef.current = false;
+      setIsChartReady(false);
       window.removeEventListener('resize', handleResize);
       observer?.disconnect();
       if (wsRef.current) {
@@ -441,22 +463,16 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
     };
   }, [isCssRotated]);
 
-  // 5. Phase 1: klinecharts v10 DataLoader (Initial Fetch + Infinite Left Scroll + WebSocket Live Updates)
+  // 5. Phase 1: klinecharts v10 DataLoader (Initial Fetch + Infinite Left Scroll)
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart) return undefined;
+    if (!isChartReady || !chart) return undefined;
 
     let isEffectActive = true;
     let retryTimer = null;
     let attempt = 0;
     const activeControllers = new Set();
-
-    const closeStream = () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
+    hasInitialDataRef.current = false;
 
     const tfMeta = TIMEFRAMES.find((t) => t.id === timeframe) || TIMEFRAMES[2];
 
@@ -481,7 +497,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           const payload = await api.getMarketKlines(symbol, timeframe, 200, beforeTs, controller.signal);
           if (!isEffectActive || controller.signal.aborted) return;
 
-          const bars = Array.isArray(payload?.bars) ? payload.bars : [];
+          const bars = Array.isArray(payload?.bars) ? payload.bars.map(normalizeCandle).filter(Boolean) : [];
           if (type === 'init' && bars.length === 0) {
             const emptyErr = new Error('داده‌ای از صرافی دریافت نشد.');
             emptyErr.status = 503;
@@ -492,7 +508,6 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           if (type === 'init') {
             setIsLoading(false);
             const precision = inferPrecision(bars);
-            // Update symbol precision smoothly on loaded dataset
             const currentSym = chart.getSymbol();
             if (currentSym && currentSym.pricePrecision !== precision) {
               currentSym.pricePrecision = precision;
@@ -505,6 +520,7 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           callback(bars, { forward: hasMore, backward: false });
 
           if (type === 'init') {
+            hasInitialDataRef.current = true;
             restoreDrawingsForSymbol(symbol);
           }
         } catch (err) {
@@ -543,38 +559,6 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
           activeControllers.delete(controller);
         }
       },
-
-      subscribeBar: ({ callback }) => {
-        closeStream();
-        if (!isEffectActive) return;
-
-        try {
-          const ws = new WebSocket(api.getMarketStreamUrl(symbol, timeframe));
-          wsRef.current = ws;
-
-          ws.onmessage = (evt) => {
-            if (!isEffectActive) return;
-            try {
-              const msg = JSON.parse(evt.data);
-              if (msg?.type === 'kline' && msg.bar) {
-                callback(msg.bar);
-              }
-            } catch (parseErr) {
-              // Ignore malformed frames
-            }
-          };
-
-          ws.onerror = () => {
-            // Silently ignore transient WS errors; REST init already succeeded
-          };
-        } catch (wsErr) {
-          // WebSocket unavailable in restricted environment
-        }
-      },
-
-      unsubscribeBar: () => {
-        closeStream();
-      },
     });
 
     const initialPairMeta = pairs.find((p) => p.symbol === symbol);
@@ -588,12 +572,95 @@ const SuperchartView = ({ pairs = [], initialSymbol = 'BTCUSDT', onOpenVipModal 
 
     return () => {
       isEffectActive = false;
-      closeStream();
+      hasInitialDataRef.current = false;
       if (retryTimer) window.clearTimeout(retryTimer);
       activeControllers.forEach((ctrl) => ctrl.abort());
       activeControllers.clear();
     };
-  }, [symbol, timeframe, retryNonce, restoreDrawingsForSymbol]);
+  }, [isChartReady, symbol, timeframe, retryNonce, restoreDrawingsForSymbol]);
+
+  // 6. Real-Time Live Candle Stream (WebSocket + 3s Auto-Reconnect + Polling Fallback)
+  // Strictly bound AFTER init(chartContainer) has returned chartRef.current.
+  useEffect(() => {
+    if (!isChartReady || !chartRef.current) return undefined;
+
+    let isActive = true;
+    let ws = null;
+    let reconnectTimer = null;
+    const pollController = new AbortController();
+
+    const injectLiveCandle = (raw) => {
+      const newCandle = normalizeCandle(raw);
+      if (!newCandle || !chartRef.current || !hasInitialDataRef.current) return;
+      console.log('LIVE DATA RECEIVED:', newCandle);
+      chartRef.current.updateData(newCandle);
+    };
+
+    const connectWebSocket = () => {
+      if (!isActive) return;
+      try {
+        ws = new WebSocket(api.getMarketStreamUrl(symbol, timeframe));
+        wsRef.current = ws;
+
+        ws.onmessage = (evt) => {
+          if (!isActive) return;
+          try {
+            const parsed = JSON.parse(evt.data);
+            injectLiveCandle(parsed?.bar || parsed);
+          } catch (parseErr) {
+            // Ignore malformed JSON frames
+          }
+        };
+
+        ws.onerror = () => {
+          if (ws && ws.readyState !== WebSocket.CLOSED) {
+            ws.close();
+          }
+        };
+
+        ws.onclose = () => {
+          if (!isActive) return;
+          wsRef.current = null;
+          reconnectTimer = window.setTimeout(connectWebSocket, 3000);
+        };
+      } catch (wsErr) {
+        reconnectTimer = window.setTimeout(connectWebSocket, 3000);
+      }
+    };
+
+    connectWebSocket();
+
+    // Defensive fallback polling while WebSocket is disconnected/handshaking
+    const pollInterval = window.setInterval(async () => {
+      if (!isActive || !hasInitialDataRef.current) return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+
+      try {
+        const res = await api.getMarketKlines(symbol, timeframe, 2, null, pollController.signal);
+        if (!isActive || pollController.signal.aborted) return;
+        const bars = Array.isArray(res?.bars) ? res.bars : [];
+        if (bars.length > 0) {
+          injectLiveCandle(bars[bars.length - 1]);
+        }
+      } catch (err) {
+        // Ignore transient fallback polling errors; WS auto-reconnect continues
+      }
+    }, 3000);
+
+    return () => {
+      isActive = false;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      window.clearInterval(pollInterval);
+      pollController.abort();
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+      }
+      wsRef.current = null;
+    };
+  }, [isChartReady, symbol, timeframe]);
 
   const handleToggleLandscape = async () => {
     if (isLandscape) {
