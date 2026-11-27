@@ -897,6 +897,10 @@ async def test_superchart_klines_vip_gating_and_failsafe_503(monkeypatch):
             assert len(r_vip.json()["bars"]) == 25
             assert r_vip.json()["hasMore"] is False
 
+            # 2.2 Fallback live polling uses limit=2 (must not 422)
+            r_poll = await ac.get("/api/v1/market/klines?symbol=BTCUSDT&timeframe=15m&limit=2", headers=headers)
+            assert r_poll.status_code == 200
+
             # 2.5 Historical pagination via before_timestamp
             hist_mock = AsyncMock(return_value=sample_bars[:5])
             monkeypatch.setattr(MarketService, "fetch_live_ohlcv_strict", hist_mock)

@@ -183,7 +183,7 @@ def _normalize_symbol_and_tf(symbol: str, timeframe: str) -> tuple[str, str]:
 async def get_superchart_klines(
     symbol: str = Query("BTCUSDT", min_length=3, max_length=30),
     timeframe: str = Query("15m"),
-    limit: int = Query(200, ge=20, le=500),
+    limit: int = Query(200, ge=1, le=500),
     before_timestamp: Optional[int] = Query(None, gt=0),
     current_user: AuthenticatedUser = Depends(require_vip_role),
 ):

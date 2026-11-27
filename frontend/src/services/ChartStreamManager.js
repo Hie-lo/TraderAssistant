@@ -78,17 +78,25 @@ class ChartStreamManager {
     this._chart = null;
     this._symbol = null;
     this._timeframe = null;
+    this._lastWsMessageAt = 0;
     this._ws = null;
     this._reconnectTimer = null;
     this._pollTimer = null;
     this._pollController = null;
     this._hasInitialData = false;
     this._sessionToken = 0;
+    this._lastWsMessageAt = 0;
 
     this._throttledPush = createThrottle((candle) => {
       if (!this._chart || !this._hasInitialData) return;
-      console.log('LIVE DATA RECEIVED:', candle);
-      this._chart.updateData(candle);
+      const dataList = this._chart.getDataList?.();
+      const lastBar = Array.isArray(dataList) && dataList.length > 0 ? dataList[dataList.length - 1] : null;
+      const payload =
+        lastBar && candle.timestamp < lastBar.timestamp
+          ? { ...candle, timestamp: lastBar.timestamp }
+          : candle;
+      console.log('LIVE DATA RECEIVED:', payload);
+      this._chart.updateData(payload);
     }, throttleMs);
   }
 
@@ -134,6 +142,7 @@ class ChartStreamManager {
             const parsed = JSON.parse(evt.data);
             const candle = normalizeCandlePayload(parsed?.bar || parsed);
             if (candle) {
+              this._lastWsMessageAt = Date.now();
               this._throttledPush(candle);
             }
           } catch (e) {
@@ -159,11 +168,15 @@ class ChartStreamManager {
 
     openSocket();
 
-    // Defensive REST polling backup strictly while WebSocket is disconnected/reconnecting
+    // Resilient REST polling backup when WS is disconnected or silent (> 3.5s)
     this._pollController = new AbortController();
     this._pollTimer = setInterval(async () => {
       if (token !== this._sessionToken || !this._hasInitialData || !this._chart) return;
-      if (this._ws && this._ws.readyState === WebSocket.OPEN) return;
+      const wsHealthy =
+        this._ws &&
+        this._ws.readyState === WebSocket.OPEN &&
+        Date.now() - this._lastWsMessageAt < 3500;
+      if (wsHealthy) return;
 
       try {
         const res = await api.getMarketKlines(
@@ -213,6 +226,7 @@ class ChartStreamManager {
 
     this._symbol = null;
     this._timeframe = null;
+    this._lastWsMessageAt = 0;
   }
 
   detachChart() {
